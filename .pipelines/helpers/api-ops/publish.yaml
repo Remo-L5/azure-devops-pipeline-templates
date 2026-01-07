@@ -1,0 +1,247 @@
+
+parameters:
+  - name: serviceConnectionName
+    type: string
+    displayName: Service Connection Name
+  - name: apimServiceOutputFolderPath
+    type: string
+    displayName: Folder where the artifacts reside
+    default: 'artifacts'
+  - name: environment
+    type: string
+    displayName: Environment to display
+  - name: resourceGroupName
+    type: string
+    displayName: Resource Group Name
+  - name: apimServiceName
+    type: string
+    displayName: APIM Instance Name
+  - name: configurationFileFormat
+    type: string
+    displayName: Optional configuration file format
+    default: "Yaml"
+    values:
+      - Yaml
+      - Json
+  - name: configurationFilePath
+    type: string
+    displayName: Optional configuration file
+  - name: commitId
+    type: string
+    default: ''
+  - name: apiopsReleaseVersion
+    type: string
+    displayName: API Ops Release Version
+    default: 'v7.0.0-alpha.1.0.2'
+
+steps:
+  - script: echo Provided configuration was ${{ parameters.configurationFilePath }}
+    displayName: Print the name of the yaml configuration file if provided
+  - script: echo Provided app service name was ${{ parameters.apimServiceName }}
+    displayName: Print the name of the apim service name if provided
+
+  - checkout: self
+    fetchDepth: 0
+
+  - task: AzureCLI@2
+    displayName: Set publishing variables
+    inputs:
+      azureSubscription: ${{ parameters.serviceConnectionName }}
+      scriptType: pscore
+      scriptLocation: inlineScript
+      inlineScript: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = "Stop"
+        $VerbosePreference = "Continue"
+        $InformationPreference = "Continue"
+
+        Write-Host "##vso[task.setvariable issecret=true;variable=AZURE_BEARER_TOKEN]$(az account get-access-token --query "accessToken" --output tsv)"
+        Write-Host "##vso[task.setvariable issecret=true;variable=AZURE_CLIENT_ID]$env:servicePrincipalId"
+        Write-Host "##vso[task.setvariable issecret=true;variable=AZURE_CLIENT_SECRET]$env:servicePrincipalKey"
+        Write-Host "##vso[task.setvariable issecret=true;variable=AZURE_TENANT_ID]$env:tenantId"
+        
+        az account show 2>$null | ConvertFrom-Json | Set-Variable account
+        # $subscriptionId = $account.id
+        $subscriptionId = "d6a7c15c-738d-4770-84c4-5f3b4952e35f"
+        $env:AZURE_SUBSCRIPTION_ID = "d6a7c15c-738d-4770-84c4-5f3b4952e35f"
+        Write-Host "##vso[task.setvariable issecret=true;variable=AZURE_SUBSCRIPTION_ID]$($subscriptionId)"
+
+        if (-not $env:AZURE_SUBSCRIPTION_ID) {
+          $subscriptionCount = az account list --query "length([])" --output tsv
+          if ($subscriptionCount -eq 1) {
+              $subscriptionId = az account list --query "[0].id" --output tsv
+              Write-Host "Setting AZURE_SUBSCRIPTION_ID environment variable to: $subscriptionId"
+              Write-Host "##vso[task.setvariable issecret=true;variable=AZURE_SUBSCRIPTION_ID]$($subscriptionId)"
+          } 
+          elseif ($subscriptionCount -gt 1) {
+              Write-Host "Multiple subscriptions are accessible. Please set the AZURE_SUBSCRIPTION_ID environment variable manually."
+              exit 1
+          }
+        }
+        else {
+          Write-Host "AZURE_SUBSCRIPTION_ID is already set to: $env:AZURE_SUBSCRIPTION_ID"
+        }
+
+      addSpnToEnvironment: true
+      failOnStandardError: true
+
+  # replacetokens@6 task will need to be installed to use
+  # - ${{ if ne(parameters.configurationFilePath, '') }}:
+  #     - task: qetza.replacetokens.replacetokens-task.replacetokens@6
+  #       displayName: "Perform namevalue secret substitution in ${{ parameters.configurationFilePath }}"
+  #       inputs:
+  #         sources: ${{ parameters.configurationFilePath }}
+  #         encoding: "auto"
+  #         addBOM: true
+  #         verbosity: "off"
+  #         missingVarAction: "none"
+  #         missingVarLog: "warn"
+  #         tokenPattern: "custom"
+  #         tokenPrefix: "{#"
+  #         tokenSuffix: "#}"
+
+  - task: PowerShell@2
+    displayName: Fetch publisher
+    inputs:
+      targetType: "inline"
+      script: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = "Stop"
+        $VerbosePreference = "Continue"
+        $InformationPreference = "Continue"
+
+        Write-Information "Setting name variables..."
+        $releaseFileName = "publisher-linux-x64.zip"
+        $executableFileName = "publisher"
+
+        if ("$(Agent.OS)" -like "*win*") {
+          $releaseFileName = "publisher-win-x64.zip"
+          $executableFileName = "publisher.exe"
+        }
+        elseif ("$(Agent.OS)" -like "*mac*" -and "$(Agent.OSArchitecture)" -like "*arm*") {
+          $releaseFileName = "publisher-osx-arm64.zip"
+        }
+        elseif ("$(Agent.OS)" -like "*mac*" -and "$(Agent.OSArchitecture)" -like "*x86_64*") {
+          $releaseFileName = "publisher-osx-x64.zip"
+        }
+
+        $apiops_release_version = "${{ parameters.apiopsReleaseVersion }}"
+
+        Write-Information "Downloading release..."
+        $uri = "https://github.com/Azure/apiops/releases/download/$apiops_release_version/$releaseFileName"
+        $downloadFilePath = Join-Path "$(Agent.TempDirectory)" $releaseFileName
+        Invoke-WebRequest -Uri "$uri" -OutFile "$downloadFilePath"
+
+        Write-Information "Extracting release..."
+        $executableFolderPath = Join-Path "$(Agent.TempDirectory)" "publisher"
+        Expand-Archive -Path "$downloadFilePath" -DestinationPath "$executableFolderPath"
+        $executableFilePath = Join-Path "$executableFolderPath" $executableFileName
+
+        Write-Information "Setting file permissions..."
+        if ("$(Agent.OS)" -like "*linux*")
+        {
+          & chmod +x "$executableFilePath"
+          if ($LASTEXITCODE -ne 0) { throw "Setting file permissions failed."}
+        }
+
+        Write-Host "##vso[task.setvariable variable=PUBLISHER_FILE_PATH]$executableFilePath"
+        Write-Information "Execution complete."
+      failOnStderr: true
+      pwsh: true
+
+  - task: PowerShell@2
+    displayName: Inspect APIM output folder
+    inputs:
+      targetType: "inline"
+      script: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = "Stop"
+        $VerbosePreference = "Continue"
+        $InformationPreference = "Continue"
+
+        $apimOutputPath = $env:API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH
+        if ([string]::IsNullOrWhiteSpace($apimOutputPath)) {
+          Write-Information "API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH not found in environment; falling back to parameter value."
+          $apimOutputPath = "${{ parameters.apimServiceOutputFolderPath }}"
+        }
+        else {
+          Write-Information "Using API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH from environment."
+        }
+
+        Write-Information "Listing top level folders beneath '$apimOutputPath'..."
+        $folders = Get-ChildItem -Path $apimOutputPath -Directory -ErrorAction SilentlyContinue
+        if (-not $folders -or $folders.Count -eq 0) {
+          Write-Information "No subfolders found under '$apimOutputPath'."
+        }
+        else {
+          $folders | ForEach-Object { Write-Information " - $($_.Name)" }
+        }
+
+        Write-Information "Inspection complete."
+      failOnStderr: true
+      pwsh: true
+    env:
+      API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH: $(Build.SourcesDirectory)/${{ parameters.apimServiceOutputFolderPath }}
+  
+  - task: PowerShell@2
+    displayName: Print configuration file
+    condition: and(succeeded(), ne('${{ parameters.configurationFilePath }}', ''))
+    inputs:
+      targetType: "inline"
+      script: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = "Stop"
+        $VerbosePreference = "Continue"
+        $InformationPreference = "Continue"
+
+        $configurationFilePath = $env:CONFIGURATION_YAML_PATH
+        if ([string]::IsNullOrWhiteSpace($configurationFilePath)) {
+          Write-Information "CONFIGURATION_YAML_PATH not provided; skipping print."
+          return
+        }
+
+        if (-not (Test-Path -LiteralPath $configurationFilePath)) {
+          Write-Warning "Configuration file '$configurationFilePath' was not found."
+        }
+        else {
+          Write-Information "Printing configuration file '$configurationFilePath':"
+          Get-Content -LiteralPath $configurationFilePath | ForEach-Object { Write-Information " $_" }
+        }
+      failOnStderr: true
+      pwsh: true
+    env:
+      CONFIGURATION_YAML_PATH: $(Build.SourcesDirectory)/${{ parameters.apimServiceOutputFolderPath }}/${{ parameters.configurationFilePath }}
+
+
+  - task: PowerShell@2
+    displayName: Run publisher for ${{ parameters.environment}} environment
+    inputs:
+      targetType: "inline"
+      script: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = "Stop"
+        $VerbosePreference = "Continue"
+        $InformationPreference = "Continue"
+
+        & "$(PUBLISHER_FILE_PATH)"
+        if ($LASTEXITCODE -ne 0) { throw "Running publisher failed."}
+
+        Write-Information "Execution complete."
+      failOnStderr: true
+      pwsh: true
+    env:
+      API_SPECIFICATION_FORMAT: ${{ parameters.configurationFileFormat }}
+      AZURE_BEARER_TOKEN: $(AZURE_BEARER_TOKEN)
+      AZURE_CLIENT_ID: $(AZURE_CLIENT_ID)
+      AZURE_CLIENT_SECRET: $(AZURE_CLIENT_SECRET)
+      AZURE_TENANT_ID: $(AZURE_TENANT_ID)
+      AZURE_SUBSCRIPTION_ID: $(AZURE_SUBSCRIPTION_ID)
+      AZURE_RESOURCE_GROUP_NAME: ${{ parameters.resourceGroupName }}
+      API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH: $(Build.SourcesDirectory)/${{ parameters.apimServiceOutputFolderPath }}
+      API_MANAGEMENT_SERVICE_NAME: ${{ parameters.apimServiceName }}
+      CONFIGURATION_YAML_PATH: $(Build.SourcesDirectory)/${{ parameters.apimServiceOutputFolderPath }}/${{ parameters.configurationFilePath }}
+      Logging__LogLevel__Default: "Trace"
+      ARM_API_VERSION: "2024-05-01"
+      ${{ if ne( parameters['commitId'], '' ) }}:
+        COMMIT_ID: ${{ parameters.commitId }}
+        

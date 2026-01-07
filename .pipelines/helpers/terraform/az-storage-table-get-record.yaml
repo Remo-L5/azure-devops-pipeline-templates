@@ -1,0 +1,228 @@
+parameters:
+  - name: storageAccountName
+    type: string
+    displayName: 'Storage Account Name'
+    default: stoalzmgmwes001fayz 
+  - name: resourceGroupName
+    type: string
+    displayName: 'Resource Group Name'
+    default: rg-alz-mgmt-state-westus2-001
+  - name: tableName
+    type: string
+    default: lzVendingResearch
+  - name: partitionKey
+    type: string
+    default: myPartitionKey
+  - name: rowKey
+    type: string
+    default: myRowKey
+  - name: serviceConnection
+    type: string
+    default: sc-alz-mgmt-plan
+  - name: rootModuleFolderRelativePath
+    type: string
+    default: '$(System.DefaultWorkingDirectory)'
+    displayName: 'Root module folder relative path for HCL variable file'
+
+steps:
+  - task: AzureCLI@2
+    displayName: 'Get Storage Table Record'
+    inputs:
+      azureSubscription: ${{ parameters.serviceConnection }}
+      scriptType: 'bash'
+      scriptLocation: 'inlineScript'
+      inlineScript: |
+        echo "Fetching record from Azure Storage Table..."
+        echo "Storage Account: ${{ parameters.storageAccountName }}"
+        echo "Resource Group: ${{ parameters.resourceGroupName }}"
+        echo "Table Name: ${{ parameters.tableName }}"
+        echo "Partition Key: ${{ parameters.partitionKey }}"
+        echo "Row Key: ${{ parameters.rowKey }}"
+        
+        # Get storage account access token using Azure AD
+        echo "Getting access token for storage account..."
+        STORAGE_ACCOUNT_ACCESS_TOKEN=$(az account get-access-token --resource https://storage.azure.com/ --query accessToken -o tsv)
+        
+        if [ -z "$STORAGE_ACCOUNT_ACCESS_TOKEN" ]; then
+          echo "##vso[task.logissue type=error]Failed to get access token for storage account"
+          exit 1
+        fi
+        
+        # Construct the storage table URL
+        TABLE_URL="https://${{ parameters.storageAccountName }}.table.core.windows.net/${{ parameters.tableName }}(PartitionKey='${{ parameters.partitionKey }}',RowKey='${{ parameters.rowKey }}')"
+        
+        echo "Table URL: $TABLE_URL"
+        
+        # Make the REST API call to get the table record
+        echo "Fetching table record..."
+        RESPONSE=$(curl -s -w "\n%{http_code}" \
+          -H "Authorization: Bearer $STORAGE_ACCOUNT_ACCESS_TOKEN" \
+          -H "Accept: application/json;odata=nometadata" \
+          -H "x-ms-version: 2020-12-06" \
+          "$TABLE_URL")
+        
+        # Extract HTTP status code and response body
+        HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+        RESPONSE_BODY=$(echo "$RESPONSE" | head -n -1)
+        
+        echo "HTTP Status Code: $HTTP_CODE"
+        
+        if [ "$HTTP_CODE" -eq 200 ]; then
+          echo "##[section]Successfully retrieved table record:"
+          echo "$RESPONSE_BODY" | jq '.' || echo "$RESPONSE_BODY"
+          
+          # Set pipeline variables with the response data
+          echo "##vso[task.setvariable variable=tableRecordData;isOutput=true]$RESPONSE_BODY"
+          echo "##vso[task.setvariable variable=tableRecordExists;isOutput=true]true"
+          
+        elif [ "$HTTP_CODE" -eq 404 ]; then
+          echo "##[warning]Table record not found (PartitionKey: '${{ parameters.partitionKey }}', RowKey: '${{ parameters.rowKey }}')"
+          echo "##vso[task.setvariable variable=tableRecordExists;isOutput=true]false"
+          
+        else
+          echo "##vso[task.logissue type=error]Failed to retrieve table record. HTTP Status: $HTTP_CODE"
+          echo "Response: $RESPONSE_BODY"
+          exit 1
+        fi
+      addSpnToEnvironment: true
+      useGlobalConfig: true
+    name: getTableRecord
+
+  - task: AzureCLI@2
+    displayName: 'Convert to HCL Variable File'
+    condition: and(succeeded(), eq(variables['getTableRecord.tableRecordExists'], 'true'))
+    inputs:
+      azureSubscription: ${{ parameters.serviceConnection }}
+      scriptType: 'bash'
+      scriptLocation: 'inlineScript'
+      inlineScript: |
+        echo "Converting storage table record to HCL variable file..."
+        
+        # Get the table record data from the previous step
+        TABLE_DATA='$(getTableRecord.tableRecordData)'
+        
+        if [ -z "$TABLE_DATA" ] || [ "$TABLE_DATA" = "null" ]; then
+          echo "##vso[task.logissue type=error]No table data available to convert"
+          exit 1
+        fi
+        
+        echo "Table data to convert:"
+        echo "$TABLE_DATA" | jq '.'
+        
+        # Create output directory if it doesn't exist
+        OUTPUT_DIR="${{ parameters.rootModuleFolderRelativePath }}"
+        mkdir -p "$OUTPUT_DIR"
+        
+        # Define the output file path using partitionKey-rowKey.auto.tfvars format
+        HCL_FILENAME="${{ parameters.partitionKey }}-${{ parameters.rowKey }}.auto.tfvars"
+        HCL_FILE="$OUTPUT_DIR/$HCL_FILENAME"
+        
+        echo "Creating HCL variable file: $HCL_FILE"
+        echo "Filename: $HCL_FILENAME"
+        
+        # Create HCL variable file with header
+        echo "# Terraform variables generated from Azure Storage Table: ${{ parameters.tableName }} (PartitionKey: ${{ parameters.partitionKey }}, RowKey: ${{ parameters.rowKey }})" > "$HCL_FILE"
+        echo "" >> "$HCL_FILE"
+        
+        # Parse JSON and create HCL variables dynamically
+        echo "$TABLE_DATA" | jq -r '
+          def is_valid_json: try (fromjson | true) catch false;
+          def json_to_hcl:
+            if type == "object" then
+              "{\n" +
+              (to_entries | map(
+                "  \"" + .key + "\" = " +
+                (if (.value | type) == "string" then
+                  "\"" + (.value | tostring) + "\""
+                elif (.value | type) == "boolean" then
+                  (.value | tostring)
+                elif (.value | type) == "number" then
+                  (.value | tostring)
+                elif (.value | type) == "array" then
+                  (.value | json_to_hcl)
+                elif (.value | type) == "object" then
+                  (.value | json_to_hcl)
+                else
+                  "\"" + (.value | tostring) + "\""
+                end)
+              ) | join("\n")) + "\n}"
+            elif type == "array" then
+              "[" +
+              (map(
+                if (. | type) == "string" then
+                  "\"" + (. | tostring) + "\""
+                elif (. | type) == "boolean" then
+                  (. | tostring)
+                elif (. | type) == "number" then
+                  (. | tostring)
+                elif (. | type) == "array" then
+                  (. | json_to_hcl)
+                elif (. | type) == "object" then
+                  (. | json_to_hcl)
+                else
+                  "\"" + (. | tostring) + "\""
+                end
+              ) | join(", ")) + "]"
+            else
+              "\"" + (. | tostring) + "\""
+            end;
+          [keys[] | select(. != "PartitionKey" and . != "RowKey" and . != "Timestamp" and . != "etag" and . != "odata.etag")] as $keys |
+          ($keys | sort) as $sorted_keys |
+          $sorted_keys[] as $key |
+          .[$key] as $value |
+          ($key | ascii_downcase | gsub("[^a-z0-9_]"; "_")) as $hcl_var_name |
+          if $value == null or $value == "" then
+            "# " + $hcl_var_name + " = \"\""
+          elif ($value | type) == "string" then
+            if ($value | ascii_downcase) == "true" then
+              $hcl_var_name + " = true"
+            elif ($value | ascii_downcase) == "false" then
+              $hcl_var_name + " = false"
+            elif ($value | is_valid_json) then
+              $hcl_var_name + " = " + ($value | fromjson | json_to_hcl)
+            else
+              $hcl_var_name + " = \"" + $value + "\""
+            end
+          elif ($value | type) == "boolean" then
+            $hcl_var_name + " = " + ($value | tostring)
+          elif ($value | type) == "number" then
+            $hcl_var_name + " = " + ($value | tostring)
+          elif ($value | type) == "array" then
+            $hcl_var_name + " = " + ($value | json_to_hcl)
+          elif ($value | type) == "object" then
+            $hcl_var_name + " = " + ($value | json_to_hcl)
+          else
+            $hcl_var_name + " = \"" + ($value | tostring) + "\""
+          end
+        ' | while IFS= read -r line; do
+          if [ -n "$line" ]; then
+            echo "$line" >> "$HCL_FILE"
+            echo "" >> "$HCL_FILE"
+          fi
+        done
+        
+        echo ""
+        echo "##[section]Generated HCL variable file:"
+        echo "File path: $HCL_FILE"
+        echo ""
+        echo "Content:"
+        cat "$HCL_FILE"
+        
+        # Set output variables
+        echo "##vso[task.setvariable variable=hclFilePath;isOutput=true]$HCL_FILE"
+        echo "##vso[task.setvariable variable=hclFileName;isOutput=true]$HCL_FILENAME"
+        echo "##vso[task.setvariable variable=hclFileCreated;isOutput=true]true"
+        
+        echo "##[section]HCL variable file created successfully!"
+      addSpnToEnvironment: true
+      useGlobalConfig: true
+    name: convertToHCL
+
+  - task: PublishPipelineArtifact@1
+    displayName: 'Publish HCL Variable File'
+    condition: and(succeeded(), eq(variables['convertToHCL.hclFileCreated'], 'true'))
+    inputs:
+      targetPath: '$(convertToHCL.hclFilePath)'
+      artifact: 'terraform-variables'
+      publishLocation: 'pipeline'
+

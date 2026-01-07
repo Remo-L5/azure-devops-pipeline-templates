@@ -1,0 +1,120 @@
+---
+parameters:
+  - name: terraformAction
+    default: 'apply'
+  - name: serviceConnection
+  - name: rootModuleFolderRelativePath
+    default: '.'
+  - name: terraformOverrideVars
+    type: object
+    default: {}
+  - name: terraformVarFileName
+    type: string
+    default: ''
+    displayName: 'Terraform variable file name (leave empty to use CLI variables only)'
+  - name: downloadedArtifactLocalPath
+    type: string
+    default: ''
+
+steps:
+  - task: AzureCLI@2
+    displayName: Terraform Plan for ${{ coalesce(parameters.terraformAction, 'Apply') }}
+    inputs:
+      azureSubscription: ${{ parameters.serviceConnection }}
+      scriptType: pscore
+      scriptLocation: inlineScript
+      addSpnToEnvironment: true
+      inlineScript: |
+        # Get settings from service connection
+        az account show 2>$null | ConvertFrom-Json | Set-Variable account
+        $clientId = $account.user.name
+        $oidcToken = $env:idToken # requires addSpnToEnvironment: true
+        $subscriptionId = $account.id
+        $tenantId = $account.tenantId
+
+        $env:ARM_TENANT_ID = $account.tenantId
+        $env:ARM_SUBSCRIPTION_ID = $account.id
+        $env:ARM_OIDC_TOKEN = $oidcToken
+        $env:ARM_USE_OIDC = "true"
+        $env:ARM_CLIENT_ID = $clientId
+        $env:ARM_USE_AZUREAD = "true"
+
+        # Run Terraform Plan
+        $command = "terraform"
+        $arguments = @()
+        $arguments += "-chdir=${{ parameters.rootModuleFolderRelativePath }}"
+        $arguments += "plan"
+        $arguments += "-out=tfplan"
+        $arguments += "-input=false"
+
+        # Check if we should use a specific var file or CLI vars
+        $terraformVarFileName = $env:TERRAFORM_VAR_FILE_NAME
+        
+        if ($null -ne $terraformVarFileName -and $terraformVarFileName.Trim() -ne '') {
+            Write-Host "Using Terraform variable file: $terraformVarFileName"
+            
+            # Construct the full path to the var file
+            $rootModulePath = "${{ parameters.rootModuleFolderRelativePath }}"
+            $varFilePath = Join-Path -Path $rootModulePath -ChildPath $terraformVarFileName
+            
+            # Check if the specified var file exists
+            if (Test-Path -Path $varFilePath -PathType Leaf) {
+                Write-Host "Found var file: $varFilePath"
+                
+                # Add the var file to terraform arguments
+                # For .auto.tfvars files, they are loaded automatically, but we can still specify them explicitly
+                if ($terraformVarFileName.EndsWith(".auto.tfvars")) {
+                    Write-Host "Note: .auto.tfvars files are loaded automatically by Terraform"
+                } else {
+                    Write-Host "Adding var file to terraform arguments"
+                    $arguments += "-var-file=$terraformVarFileName"
+                }
+                
+                Write-Host "Variable file mode: Skipping CLI variables (terraformOverrideVars will be ignored)"
+            } else {
+                Write-Error "##vso[task.logissue type=error]Specified terraform var file not found: $varFilePath"
+                Write-Error "The terraform variable file '$terraformVarFileName' does not exist in the root module path '$rootModulePath'."
+                Write-Error "Please ensure the file exists or remove the terraformVarFileName parameter to use CLI variables instead."
+                exit 1
+            }
+        } else {
+            Write-Host "No terraform var file specified. Using CLI variables only."
+            
+            $terraformOverrideVars = $env:TERRAFORM_OVERRIDE_VARS
+            if ($null -ne $terraformOverrideVars -and $terraformOverrideVars.Trim() -ne '' -and $terraformOverrideVars.Trim() -ne '{}') {
+              try {
+                  Write-Host "Terraform override variables provided."
+                  $terraformVars = $terraformOverrideVars | ConvertFrom-Json
+                  foreach ($property in $terraformVars.PSObject.Properties) {
+                      $key = $property.Name
+                      Write-Host "Processing variable: $key"
+                      $value = $property.Value
+                      # Convert booleans and other types to lowercase strings
+                      if ($value -is [bool] -or $value -is [int] -or $value -is [double]) {
+                        $value = $value.ToString().ToLower()
+                      } elseif ($value -is [string]) {
+                        $value = $value.Trim()
+                      }
+                      $arguments += "-var=$key=$value"
+                  }
+              } catch {
+                  Write-Error "Failed to parse terraformOverrideVars as JSON: $_"
+              }
+            } else {
+                Write-Host "terraformOverrideVars is null or empty. Skipping JSON conversion."
+            }
+        }
+
+        if ($env:TERRAFORM_ACTION -eq 'destroy') {
+          $arguments += "-destroy"
+        }
+
+        Write-Host "Running: $command $arguments"
+        & $command $arguments
+
+    env:
+      TERRAFORM_ACTION: ${{ coalesce(parameters.terraformAction, 'apply') }}
+      TERRAFORM_OVERRIDE_VARS: ${{ convertToJson(parameters.terraformOverrideVars) }}
+      TERRAFORM_VAR_FILE_NAME: ${{ parameters.terraformVarFileName }}
+      ${{ if ne(parameters.downloadedArtifactLocalPath, '') }}:
+        TF_VAR_artifact_local_path: ${{ parameters.downloadedArtifactLocalPath }}

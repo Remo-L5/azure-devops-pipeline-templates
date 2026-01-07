@@ -1,0 +1,219 @@
+---
+parameters:
+  - name: terraformAction
+    default: 'apply'
+  - name: rootModuleFolderRelativePath
+    default: '.'
+  - name: terraformCliVersion
+    default: 'latest'
+  - name: serviceConnectionNameTfPlan
+    type: string
+    default: 'sc-alz-mgmt-plan'
+  - name: serviceConnectionNameTfApply
+    type: string
+    default: 'sc-alz-mgmt-apply'
+  - name: backendStateVariableGroup
+    type: string
+    default: 'alz-mgmt'
+  - name: terraformOverrideVars
+    type: object
+    default: {}
+    displayName: 'Terraform variable file name (leave empty to use CLI variables only)'
+  - name: terraformWorkspace
+    type: string
+    default: 'dev'
+  - name: subscriptionVendingRun
+    type: boolean
+    default: false
+  - name: tableName
+    type: string
+    default: 'researchLzVending'
+  - name: partitionKey
+    type: string
+    default: 'NOT_SET'
+  - name: rowKey
+    type: string
+    default: 'NOT_SET'
+  - name: planStageName
+    type: string
+    default: 'plan'
+  - name: planStageDisplayName
+    type: string
+    default: 'Plan'
+  - name: applyStageName
+    type: string
+    default: 'apply'
+  - name: applyStageDisplayName
+    type: string
+    default: 'Apply'
+  - name: planStageDependsOn
+    type: object
+    default: []
+  - name: planArtifactDownload
+    type: object
+    default:
+      enabled: false
+      artifactName: ''
+      targetPath: ''
+
+
+
+stages:
+  - stage: ${{ parameters.planStageName }}
+    displayName: ${{ parameters.planStageDisplayName }}
+    variables:
+      - group: ${{ parameters.backendStateVariableGroup }}
+      - name: terraformVarFileName
+        ${{ if ne(parameters.subscriptionVendingRun, false) }}:
+          value: '${{ parameters.partitionKey }}-${{ parameters.rowKey }}.auto.tfvars'
+        ${{ if ne(parameters.subscriptionVendingRun, true) }}:
+          value: ''
+    ${{ if gt(length(parameters.planStageDependsOn), 0) }}:
+      dependsOn: ${{ parameters.planStageDependsOn }}
+    jobs:
+      - deployment: plan
+        displayName: Plan with Terraform
+        pool:
+          name: ado-devops-pool
+        environment: alz-mgmt-plan
+        timeoutInMinutes: 0
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                  displayName: Checkout Terraform Module
+                - template: terraform-installer.yaml
+                  parameters:
+                    terraformVersion: ${{ parameters.terraformCliVersion }}
+                - ${{ if ne(parameters.subscriptionVendingRun, false) }}:
+                  - template: az-storage-table-get-record.yaml
+                    parameters:
+                      serviceConnection: ${{ parameters.serviceConnectionNameTfPlan }}
+                      tableName: ${{ parameters.tableName }}
+                      partitionKey: ${{ parameters.partitionKey }}
+                      rowKey: ${{ parameters.rowKey }}
+                      rootModuleFolderRelativePath: ${{ parameters.rootModuleFolderRelativePath }}
+                - template: terraform-init.yaml
+                  parameters:
+                    serviceConnection: ${{ parameters.serviceConnectionNameTfPlan }}
+                    backendAzureResourceGroupName: $(BACKEND_AZURE_RESOURCE_GROUP_NAME)
+                    backendAzureStorageAccountName: $(BACKEND_AZURE_STORAGE_ACCOUNT_NAME)
+                    backendAzureStorageAccountContainerName: $(BACKEND_AZURE_STORAGE_ACCOUNT_CONTAINER_NAME)
+                    backendAzureStorageAccountContainerKeyName: "${{ parameters.terraformWorkspace }}/terraform.tfstate"
+                    rootModuleFolderRelativePath: ${{ parameters.rootModuleFolderRelativePath }}
+                - template: terraform-workspace.yaml
+                  parameters:
+                    serviceConnection: ${{ parameters.serviceConnectionNameTfPlan }}
+                    terraformWorkspace: ${{ parameters.terraformWorkspace }}
+                - ${{ if and(eq(parameters.planArtifactDownload.enabled, true), ne(parameters.planArtifactDownload.artifactName, ''), ne(parameters.planArtifactDownload.targetPath, '')) }}:
+                  - task: DownloadPipelineArtifact@2
+                    displayName: Download Deployable Artifact
+                    inputs:
+                      buildType: 'current'
+                      artifactName: ${{ parameters.planArtifactDownload.artifactName }}
+                      targetPath: ${{ parameters.planArtifactDownload.targetPath }}
+                  - pwsh: |
+                      $artifactPath = "${{ parameters.planArtifactDownload.targetPath }}"
+                      if (-not (Test-Path -LiteralPath $artifactPath)) {
+                        Write-Warning "Artifact path '$artifactPath' was not found after download."
+                      } else {
+                        $resolved = (Resolve-Path -LiteralPath $artifactPath).ProviderPath
+                        Write-Host "Artifact '${{ parameters.planArtifactDownload.artifactName }}' downloaded to '$resolved'"
+                      }
+                    displayName: Log Artifact Download Path
+                - template: terraform-plan.yaml
+                  parameters:
+                    terraformAction: ${{ parameters.terraformAction }}
+                    serviceConnection: ${{ parameters.serviceConnectionNameTfPlan }}
+                    rootModuleFolderRelativePath: ${{ parameters.rootModuleFolderRelativePath }}
+                    terraformOverrideVars: ${{ parameters.terraformOverrideVars }}
+                    terraformVarFileName: ${{ variables.terraformVarFileName }}
+                    downloadedArtifactLocalPath: ${{ parameters.planArtifactDownload.targetPath }}
+                - task: CopyFiles@2
+                  displayName: Create Module Artifact
+                  inputs:
+                    SourceFolder: '$(Build.SourcesDirectory)'
+                    Contents: |
+                      **/*
+                      !.terraform/**/*
+                      !.git/**/*
+                      !.pipelines/**/*
+                      !**/.terraform/**/*
+                      !**/.git/**/*
+                      !**/.pipelines/**/*
+                    TargetFolder: '$(Build.ArtifactsStagingDirectory)'
+                    CleanTargetFolder: true
+                    OverWrite: true
+                - task: PublishPipelineArtifact@1
+                  displayName: Publish Module Artifact
+                  inputs:
+                    targetPath: '$(Build.ArtifactsStagingDirectory)'
+                    artifact: 'module'
+                    publishLocation: 'pipeline'
+                - pwsh: |
+                    terraform `
+                    -chdir="${{ parameters.rootModuleFolderRelativePath }}" `
+                    show `
+                    tfplan
+                  displayName: Show the Plan for Review
+  - stage: ${{ parameters.applyStageName }}
+    displayName: ${{ parameters.applyStageDisplayName }}
+    dependsOn: ${{ parameters.planStageName }}
+    variables:
+      - group: ${{ parameters.backendStateVariableGroup }}
+    jobs:
+      - deployment: apply
+        displayName: Apply with Terraform
+        pool:
+          name: ado-devops-pool
+        environment: alz-mgmt-apply
+        timeoutInMinutes: 0
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: none
+                - task: DownloadPipelineArtifact@2
+                  displayName: Download Module Artifact
+                  inputs:
+                    buildType: 'current'
+                    artifactName: 'module'
+                    targetPath: '$(Build.SourcesDirectory)'
+                - template: terraform-installer.yaml
+                  parameters:
+                    terraformVersion: ${{ parameters.terraformCliVersion }}
+                - ${{ if and(eq(parameters.planArtifactDownload.enabled, true), ne(parameters.planArtifactDownload.artifactName, ''), ne(parameters.planArtifactDownload.targetPath, '')) }}:
+                  - task: DownloadPipelineArtifact@2
+                    displayName: Download Deployable Artifact
+                    inputs:
+                      buildType: 'current'
+                      artifactName: ${{ parameters.planArtifactDownload.artifactName }}
+                      targetPath: ${{ parameters.planArtifactDownload.targetPath }}
+                  - pwsh: |
+                      $artifactPath = "${{ parameters.planArtifactDownload.targetPath }}"
+                      if (-not (Test-Path -LiteralPath $artifactPath)) {
+                        Write-Warning "Artifact path '$artifactPath' was not found after download."
+                      } else {
+                        $resolved = (Resolve-Path -LiteralPath $artifactPath).ProviderPath
+                        Write-Host "Artifact '${{ parameters.planArtifactDownload.artifactName }}' downloaded to '$resolved'"
+                      }
+                    displayName: Log Artifact Download Path
+                - template: terraform-init.yaml
+                  parameters:
+                    serviceConnection: ${{ parameters.serviceConnectionNameTfApply}}
+                    backendAzureResourceGroupName: $(BACKEND_AZURE_RESOURCE_GROUP_NAME)
+                    backendAzureStorageAccountName: $(BACKEND_AZURE_STORAGE_ACCOUNT_NAME)
+                    backendAzureStorageAccountContainerName: $(BACKEND_AZURE_STORAGE_ACCOUNT_CONTAINER_NAME)
+                    backendAzureStorageAccountContainerKeyName: "${{ parameters.terraformWorkspace }}/terraform.tfstate"
+                    rootModuleFolderRelativePath: ${{ parameters.rootModuleFolderRelativePath }}
+                - template: terraform-workspace.yaml
+                  parameters:
+                    serviceConnection: ${{ parameters.serviceConnectionNameTfApply }}
+                    terraformWorkspace: ${{ parameters.terraformWorkspace }}
+                - template: terraform-apply.yaml
+                  parameters:
+                    terraformAction: ${{ parameters.terraformAction }}
+                    serviceConnection: ${{ parameters.serviceConnectionNameTfApply}}
+                    rootModuleFolderRelativePath: ${{ parameters.rootModuleFolderRelativePath }}
+                    downloadedArtifactLocalPath: ${{ parameters.planArtifactDownload.targetPath }}

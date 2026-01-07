@@ -1,0 +1,24 @@
+---
+parameters:
+  - name: name
+    type: string
+  - name: dependencies
+    type: object
+    default: []
+  - name: projectSpecs
+    type: object
+    default: {}
+
+stages:
+  - stage: ${{ parameters.name }}
+    displayName: ${{ coalesce(parameters.projectSpecs.stageDisplayName, format('Publish {0}', parameters.name)) }}
+    ${{ if gt(length(parameters.dependencies), 0) }}:
+      dependsOn: ${{ parameters.dependencies }}
+    jobs:
+      - job: ${{ coalesce(parameters.projectSpecs.jobName, format('apiops_{0}', parameters.name)) }}
+        displayName: ${{ coalesce(parameters.projectSpecs.jobDisplayName, 'Run API Ops Publisher') }}
+        pool:
+          name: ${{ coalesce(parameters.projectSpecs.poolName, 'ado-devops-pool') }}
+        steps:
+          - template: publish.yaml
+            parameters: ${{ parameters.projectSpecs }}

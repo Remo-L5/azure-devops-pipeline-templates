@@ -1,0 +1,88 @@
+---
+parameters:
+  - name: projects
+    type: object
+    default: []
+  - name: emptyDependencyList
+    type: object
+    default: []
+  - name: emptySpecsObject
+    type: object
+    default: {}
+  # Projects parameter expects an array of entries:
+  # projects:
+  #   - name: 'lz-shared'
+  #     projectType: 'terraform'
+  #     dependencies: []
+  #     projectSpecs:
+  #       terraformAction: 'apply'
+  #       terraformCliVersion: 'latest'
+  #       rootModuleFolderRelativePath: '.'
+  #       serviceConnectionNameTfPlan: 'sc-alz-mgmt-plan'
+  #       serviceConnectionNameTfApply: 'sc-alz-mgmt-apply'
+  #       backendStateVariableGroup: 'alz-mgmt'
+  #       terraformWorkspace: 'dev'
+  #   - name: 'publisher-dev'
+  #     projectType: 'api-ops'
+  #     dependencies:
+  #       - function-dev
+  #     projectSpecs:
+  #       serviceConnectionName: 'sc-apiops'
+  #       apimServiceOutputFolderPath: 'dist/apim'
+  #       environment: 'dev'
+  #       resourceGroupName: 'rg-api-dev'
+  #       apiManagementServiceBaseName: 'contoso-apim'
+  #       configurationYamlPath: ''
+  #       commitId: 'publish-artifacts-in-last-commit'
+  #   - name: 'function-dev'
+  #     projectType: 'dotnet'
+  #     dependencies:
+  #       - lz-shared
+  #     projectSpecs:
+  #       webAppProjectsPath: '**/*.csproj'
+  #       zipArtifactName: 'function-app-artifact'
+  #       dotnetVersion: '8.x'
+
+
+stages:
+  - ${{ each project in parameters.projects }}:
+      - ${{ if eq(project.projectType, 'terraform') }}:
+          - template: helpers/terraform/terraform.yaml
+            parameters: ${{ project.projectSpecs }}
+              # terraformAction: ${{ coalesce(project.projectSpecs.terraformAction, 'apply') }}
+              # rootModuleFolderRelativePath: ${{ coalesce(project.projectSpecs.rootModuleFolderRelativePath, '.') }}
+              # terraformCliVersion: ${{ coalesce(project.projectSpecs.terraformCliVersion, 'latest') }}
+              # serviceConnectionNameTfPlan: ${{ coalesce(project.projectSpecs.serviceConnectionNameTfPlan, 'sc-alz-mgmt-plan') }}
+              # serviceConnectionNameTfApply: ${{ coalesce(project.projectSpecs.serviceConnectionNameTfApply, 'sc-alz-mgmt-apply') }}
+              # backendStateVariableGroup: ${{ coalesce(project.projectSpecs.backendStateVariableGroup, 'alz-mgmt') }}
+              # terraformOverrideVars: ${{ coalesce(project.projectSpecs.terraformOverrideVars, parameters.emptySpecsObject) }}
+              # terraformWorkspace: ${{ coalesce(project.projectSpecs.terraformWorkspace, 'dev') }}
+              # subscriptionVendingRun: ${{ coalesce(project.projectSpecs.subscriptionVendingRun, false) }}
+              # tableName: ${{ coalesce(project.projectSpecs.tableName, 'researchLzVending') }}
+              # partitionKey: ${{ coalesce(project.projectSpecs.partitionKey, 'NOT_SET') }}
+              # rowKey: ${{ coalesce(project.projectSpecs.rowKey, 'NOT_SET') }}
+              # planStageName: ${{ coalesce(project.planStageName, format('plan_{0}', project.name)) }}
+              # planStageDisplayName: ${{ coalesce(project.projectSpecs.planStageDisplayName, format('Plan {0}', project.name)) }}
+              # applyStageName: ${{ coalesce(project.applyStageName, project.name) }}
+              # applyStageDisplayName: ${{ coalesce(project.projectSpecs.applyStageDisplayName, format('Apply {0}', project.name)) }}
+              # planStageDependsOn: ${{ coalesce(project.dependencies, parameters.emptyDependencyList) }}
+      - ${{ if eq(project.projectType, 'api-ops') }}:
+          - template: helpers/api-ops/api-ops.yaml
+            parameters: 
+              dependencies: ${{ coalesce(project.dependencies, parameters.emptyDependencyList) }}
+              projectSpecs: ${{ project.projectSpecs }}
+              name: ${{ project.name }}
+              # serviceConnectionName: ${{ coalesce(project.projectSpecs.serviceConnectionName, 'sc-apiops') }}
+              # apimServiceOutputFolderPath: ${{ coalesce(project.projectSpecs.apimServiceOutputFolderPath, 'dist/apim') }}
+              # environment: ${{ coalesce(project.projectSpecs.environment, 'dev') }}
+              # resourceGroupName: ${{ coalesce(project.projectSpecs.resourceGroupName, 'rg-api-dev') }}
+              # apiManagementServiceBaseName: ${{ coalesce(project.projectSpecs.apiManagementServiceBaseName, 'contoso-apim') }}
+              # configurationYamlPath: ${{ coalesce(project.projectSpecs.configurationYamlPath, '') }}
+              # commitId: ${{ coalesce(project.projectSpecs.commitId, 'publish-artifacts-in-last-commit') }}
+              # dependsOn: ${{ coalesce(project.dependencies, parameters.emptyDependencyList) }}
+      - ${{ if eq(project.projectType, 'dotnet') }}:
+          - template: helpers/dotnet/dotnet.yaml
+            parameters: ${{ project.projectSpecs }}
+              # webAppProjectsPath: ${{ coalesce(project.projectSpecs.webAppProjectsPath, '**/*.csproj') }}
+              # zipArtifactName: ${{ coalesce(project.projectSpecs.zipArtifactName, 'NOT_SET') }}
+              # dotnetVersion: ${{ coalesce(project.projectSpecs.dotnetVersion, '8.x') }}

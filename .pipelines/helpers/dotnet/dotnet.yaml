@@ -1,0 +1,50 @@
+---
+parameters:
+  - name: webAppProjectsPath
+    type: string
+    default: '**/*.csproj'
+  - name: zipArtifactName
+    type: string
+    default: 'NOT_SET'
+  - name: dotnetVersion
+    type: string
+    default: '8.x'
+  - name: dotnetStageDependsOn
+    type: object
+    default: []
+
+stages:
+  - stage: dotnet
+    displayName: DotNet
+    ${{ if gt(length(parameters.dotnetStageDependsOn), 0) }}:
+      dependsOn: ${{ parameters.dotnetStageDependsOn }}
+    jobs:
+      - job: build_project
+        steps:
+        - task: UseDotNet@2
+          displayName: 'Install .NET Core SDK'
+          inputs:
+            version: ${{ parameters.dotnetVersion }}
+            performMultiLevelLookup: true
+            includePreviewVersions: true # Required for preview versions
+
+        - task: DotNetCoreCLI@2
+          inputs:
+            command: 'build'
+            projects: ${{ parameters.webAppProjectsPath }}
+            arguments: '--configuration $(buildConfiguration)'
+          displayName: 'dotnet build'
+
+        - task: DotNetCoreCLI@2
+          inputs:
+            command: publish
+            projects: ${{ parameters.webAppProjectsPath }}
+            publishWebProjects: false
+            arguments: '--configuration $(BuildConfiguration) --output $(Build.ArtifactStagingDirectory)/WebApp_$(Build.BuildNumber)'
+            zipAfterPublish: True
+          displayName: 'dotnet publish'
+
+        - task: PublishBuildArtifacts@1
+          inputs:
+            PathtoPublish: '$(Build.ArtifactStagingDirectory)/WebApp_$(Build.BuildNumber)'
+            ArtifactName: ${{ parameters.zipArtifactName }}

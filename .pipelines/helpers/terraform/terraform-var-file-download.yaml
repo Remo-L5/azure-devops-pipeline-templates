@@ -1,0 +1,19 @@
+---
+parameters:
+  - name: artifactName
+    type: string
+    default: 'NOT_SET'
+    displayName: 'Name of the artifact containing Terraform variable files'
+  - name: targetPath
+    type: string
+    default: '.'
+    displayName: 'Target path where the variable files should be downloaded'
+
+steps:
+  - task: DownloadPipelineArtifact@2
+    displayName: Download Terraform Variable Files
+    condition: ne('${{ parameters.artifactName }}', 'NOT_SET')
+    inputs:
+      buildType: 'current'
+      artifactName: '${{ parameters.artifactName }}'
+      targetPath: '${{ parameters.targetPath }}'

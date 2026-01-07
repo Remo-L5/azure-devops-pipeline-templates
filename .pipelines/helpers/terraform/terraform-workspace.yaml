@@ -1,0 +1,26 @@
+parameters:
+ - name: terraformWorkspace
+   type: string
+ - name: serviceConnection
+
+steps:
+- task: AzureCLI@2
+  displayName: Terraform Set Workspace
+  inputs:
+    azureSubscription: ${{ parameters.serviceConnection }}
+    scriptType: pscore
+    scriptLocation: inlineScript
+    addSpnToEnvironment: true
+    inlineScript: |
+      $workspaceName="${{ parameters.terraformWorkspace }}"
+            
+      # Check if the workspace exists
+      
+      $existingWorkspaces = terraform workspace list
+
+      if ($existingWorkspaces -match $workspaceName) {
+          terraform workspace select $workspaceName
+      } else {
+          terraform workspace new $workspaceName
+          terraform workspace select $workspaceName
+      }

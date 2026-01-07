@@ -1,0 +1,85 @@
+---
+parameters:
+  - name: rootModuleFolderRelativePath
+    default: '.'
+  - name: terraformCliVersion
+    default: 'latest'
+  - name: serviceConnectionNameTfPlan
+    type: string
+    default: 'sc-alz-mgmt-plan'
+  - name: backendStateVariableGroup
+    type: string
+    default: 'alz-mgmt'
+  - name: terraformOverrideVars
+    type: object
+    default: {}
+  - name: terraformWorkspace
+    type: string
+    default: 'dev'
+
+variables:
+  - group: ${{ parameters.backendStateVariableGroup }}
+  - name: 'selfHostedAgent'
+    value: 'true'
+
+stages:
+  - stage: validate
+    displayName: Validation Terraform
+    jobs:
+      - job: validate
+        displayName: Validate Terraform
+        pool:
+          name: alz-mgmt
+        steps:
+          - template: helpers/terraform-installer.yaml
+            parameters:
+              terraformVersion: ${{ parameters.terraformCliVersion }}
+          - pwsh: |
+              terraform `
+              -chdir="${{ parameters.rootModuleFolderRelativePath }}" `
+              fmt `
+              -check
+            displayName: Terraform Format Check
+          - pwsh: |
+              terraform `
+              -chdir="${{ parameters.rootModuleFolderRelativePath }}" `
+              init `
+              -backend=false
+            displayName: Terraform Init
+          - pwsh: |
+              terraform `
+              -chdir="${{ parameters.rootModuleFolderRelativePath }}" `
+              validate
+            displayName: Terraform Validate
+      - deployment: plan
+        dependsOn: validate
+        displayName: Validate Terraform Plan
+        pool:
+          name: alz-mgmt
+        environment: alz-mgmt-plan
+        timeoutInMinutes: 0
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                  displayName: Checkout Terraform Module
+                - template: helpers/terraform-installer.yaml
+                  parameters:
+                    terraformVersion: ${{ parameters.terraformCliVersion }}
+                - template: helpers/terraform-init.yaml
+                  parameters:
+                    serviceConnection: ${{ parameters.serviceConnectionNameTfPlan }}
+                    backendAzureResourceGroupName: $(BACKEND_AZURE_RESOURCE_GROUP_NAME)
+                    backendAzureStorageAccountName: $(BACKEND_AZURE_STORAGE_ACCOUNT_NAME)
+                    backendAzureStorageAccountContainerName: $(BACKEND_AZURE_STORAGE_ACCOUNT_CONTAINER_NAME)
+                    backendAzureStorageAccountContainerKeyName: "${{ parameters.terraformWorkspace }}/terraform.tfstate"
+                    rootModuleFolderRelativePath: ${{ parameters.rootModuleFolderRelativePath }}
+                - template: helpers/terraform-workspace.yaml
+                  parameters:
+                    serviceConnection: ${{ parameters.serviceConnectionNameTfPlan }}
+                    terraformWorkspace: ${{ parameters.terraformWorkspace }}
+                - template: helpers/terraform-plan.yaml
+                  parameters:
+                    serviceConnection: ${{ parameters.serviceConnectionNameTfPlan }}
+                    rootModuleFolderRelativePath: ${{ parameters.rootModuleFolderRelativePath }}
