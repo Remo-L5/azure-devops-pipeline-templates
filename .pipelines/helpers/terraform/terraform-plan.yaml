@@ -89,11 +89,22 @@ steps:
                       $key = $property.Name
                       Write-Host "Processing variable: $key"
                       $value = $property.Value
+                      Write-Host "  Type: $($value.GetType().Name), Value: $value"
                       # Convert booleans and other types to lowercase strings
-                      if ($value -is [bool] -or $value -is [int] -or $value -is [double]) {
+                      $valueType = $value.GetType().Name
+                      if ($valueType -eq 'Boolean') {
+                        $value = if ($value -eq $true) { "true" } else { "false" }
+                      } elseif ($value -is [int] -or $value -is [double]) {
                         $value = $value.ToString().ToLower()
                       } elseif ($value -is [string]) {
-                        $value = $value.Trim()
+                        # Also handle string values that might be "True"/"False"
+                        if ($value -eq "True") {
+                          $value = "true"
+                        } elseif ($value -eq "False") {
+                          $value = "false"
+                        } else {
+                          $value = $value.Trim()
+                        }
                       }
                       $arguments += "-var=$key=$value"
                   }
