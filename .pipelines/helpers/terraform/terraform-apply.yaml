@@ -33,10 +33,17 @@ steps:
         $env:ARM_USE_AZUREAD = "true"
         $env:AZAPI_RETRY_GET_AFTER_PUT_MAX_TIME = "60m" # Accounts for eventually consistent management group permissions propagation
 
+        $modulePath = Join-Path $env:PIPELINE_WORKSPACE 'src'
+        if ('${{ parameters.root_module_folder_relative_path }}' -and
+          '${{ parameters.root_module_folder_relative_path }}' -ne '.' -and
+          '${{ parameters.root_module_folder_relative_path }}' -ne '') {
+          $modulePath = Join-Path $modulePath "${{ parameters.root_module_folder_relative_path }}"
+        }
+
         # Run Terraform Apply
         $command = "terraform"
         $arguments = @()
-        $arguments += "-chdir=${{ parameters.rootModuleFolderRelativePath }}"
+        $arguments += "-chdir=$modulePath"
         $arguments += "apply"
         $arguments += "-auto-approve"
         $arguments += "tfplan"

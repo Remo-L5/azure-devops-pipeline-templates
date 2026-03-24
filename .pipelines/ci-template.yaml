@@ -16,6 +16,9 @@ parameters:
   - name: terraformWorkspace
     type: string
     default: 'dev'
+  - name: moduleAliases
+    type: object
+    default: []
 
 variables:
   - group: ${{ parameters.backendStateVariableGroup }}
@@ -64,6 +67,21 @@ stages:
               steps:
                 - checkout: self
                   displayName: Checkout Terraform Module
+                  persistCredentials: true
+                  path: src
+                - ${{ each mod in parameters.moduleAliases }}:
+                  - checkout: ${{ mod.alias }}
+                    path: src/modules/${{ mod.alias }}
+                
+                - pwsh: |
+                    Write-Host "Listing $(Pipeline.Workspace)/src"
+                    if (Test-Path "$(Pipeline.Workspace)/src") {
+                      Get-ChildItem -Path "$(Pipeline.Workspace)/src" -Recurse -Force | ForEach-Object { Write-Output $_.FullName }
+                    } else {
+                      Write-Host "Directory not found: $(Pipeline.Workspace)/src"
+                    }
+                  displayName: List src folder contents
+                  
                 - template: helpers/terraform-installer.yaml
                   parameters:
                     terraformVersion: ${{ parameters.terraformCliVersion }}

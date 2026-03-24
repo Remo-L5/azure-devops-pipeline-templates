@@ -55,6 +55,9 @@ parameters:
       enabled: false
       artifactName: ''
       targetPath: ''
+  - name: moduleAliases
+    type: object
+    default: []
 
 
 
@@ -83,6 +86,22 @@ stages:
               steps:
                 - checkout: self
                   displayName: Checkout Terraform Module
+                  persistCredentials: true
+                  path: src
+
+                - ${{ each mod in parameters.moduleAliases }}:
+                  - checkout: ${{ mod.alias }}
+                    path: src/modules/${{ mod.alias }}
+
+                - pwsh: |
+                    Write-Host "Listing $(Pipeline.Workspace)/src"
+                    if (Test-Path "$(Pipeline.Workspace)/src") {
+                      Get-ChildItem -Path "$(Pipeline.Workspace)/src" -Recurse -Force | ForEach-Object { Write-Output $_.FullName }
+                    } else {
+                      Write-Host "Directory not found: $(Pipeline.Workspace)/src"
+                    }
+                  displayName: List src folder contents
+
                 - template: terraform-installer.yaml
                   parameters:
                     terraformVersion: ${{ parameters.terraformCliVersion }}
@@ -106,6 +125,7 @@ stages:
                   parameters:
                     serviceConnection: ${{ parameters.serviceConnectionNameTfPlan }}
                     terraformWorkspace: ${{ parameters.terraformWorkspace }}
+                    root_module_folder_relative_path: ${{ parameters.root_module_folder_relative_path }}
                 - ${{ if and(eq(parameters.planArtifactDownload.enabled, true), ne(parameters.planArtifactDownload.artifactName, ''), ne(parameters.planArtifactDownload.targetPath, '')) }}:
                   - task: DownloadPipelineArtifact@2
                     displayName: Download Deployable Artifact
@@ -133,7 +153,7 @@ stages:
                 - task: CopyFiles@2
                   displayName: Create Module Artifact
                   inputs:
-                    SourceFolder: '$(Build.SourcesDirectory)'
+                    SourceFolder: '$(Pipeline.Workspace)'
                     Contents: |
                       **/*
                       !.terraform/**/*
@@ -153,7 +173,7 @@ stages:
                     publishLocation: 'pipeline'
                 - pwsh: |
                     terraform `
-                    -chdir="${{ parameters.rootModuleFolderRelativePath }}" `
+                    -chdir="$(Pipeline.Workspace)/src/${{ parameters.root_module_folder_relative_path }}" `
                     show `
                     tfplan
                   displayName: Show the Plan for Review
@@ -179,7 +199,7 @@ stages:
                   inputs:
                     buildType: 'current'
                     artifactName: 'module'
-                    targetPath: '$(Build.SourcesDirectory)'
+                    targetPath: '$(Pipeline.Workspace)'
                 - template: terraform-installer.yaml
                   parameters:
                     terraformVersion: ${{ parameters.terraformCliVersion }}
