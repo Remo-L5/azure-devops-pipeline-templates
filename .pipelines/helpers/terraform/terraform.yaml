@@ -58,6 +58,14 @@ parameters:
   - name: moduleAliases
     type: object
     default: []
+  - name: additionalVarFilesDirectory
+    type: string
+    default: ''
+    displayName: 'Directory to scan for additional var files'
+  - name: additionalVarFilesPattern
+    type: string
+    default: '*.tfvars'
+    displayName: 'File pattern to match additional var files (e.g., *.tfvars, dev-*.tfvars)'
 
 
 
@@ -150,6 +158,8 @@ stages:
                     terraformOverrideVars: ${{ parameters.terraformOverrideVars }}
                     terraformVarFileName: ${{ variables.terraformVarFileName }}
                     downloadedArtifactLocalPath: ${{ parameters.planArtifactDownload.targetPath }}
+                    additionalVarFilesDirectory: ${{ parameters.additionalVarFilesDirectory }}
+                    additionalVarFilesPattern: ${{ parameters.additionalVarFilesPattern }}
                 - task: CopyFiles@2
                   displayName: Create Module Artifact
                   inputs:
