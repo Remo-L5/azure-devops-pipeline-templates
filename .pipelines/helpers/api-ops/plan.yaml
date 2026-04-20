@@ -1,9 +1,9 @@
 ---
-# API-Ops Publish (Deploy) Step Template
-# This template runs the publisher to apply changes to APIM.
-# Use this as part of the Deploy stage after the Plan stage validates changes.
+# API-Ops Plan Step Template
+# This template runs the publisher in dry-run mode to validate and preview changes
+# without making any actual modifications to APIM. Similar to 'terraform plan'.
 #
-# For dry-run validation, use plan.yaml instead.
+# Requires API-Ops v7.0.0 or later for dry-run support.
 
 parameters:
   - name: serviceConnectionName
@@ -43,10 +43,14 @@ parameters:
     type: string
     displayName: API Ops Release Version
     default: 'v7.0.0-rc.1.0.0'
+  - name: strictValidation
+    type: boolean
+    displayName: Strict Validation Mode
+    default: true
 
 steps:
-  - script: echo "Deploying API-Ops changes for ${{ parameters.environment }} environment"
-    displayName: Deploy Stage Information
+  - script: echo "Running API-Ops Plan (dry-run) for ${{ parameters.environment }} environment"
+    displayName: Plan Stage Information
 
   - checkout: self
     fetchDepth: 0
@@ -99,21 +103,6 @@ steps:
 
       addSpnToEnvironment: true
       failOnStandardError: false
-
-  # replacetokens@6 task will need to be installed to use
-  # - ${{ if ne(parameters.configurationFilePath, '') }}:
-  #     - task: qetza.replacetokens.replacetokens-task.replacetokens@6
-  #       displayName: "Perform namevalue secret substitution in ${{ parameters.configurationFilePath }}"
-  #       inputs:
-  #         sources: ${{ parameters.configurationFilePath }}
-  #         encoding: "auto"
-  #         addBOM: true
-  #         verbosity: "off"
-  #         missingVarAction: "none"
-  #         missingVarLog: "warn"
-  #         tokenPattern: "custom"
-  #         tokenPrefix: "{#"
-  #         tokenSuffix: "#}"
 
   - task: PowerShell@2
     displayName: Fetch publisher
@@ -197,7 +186,7 @@ steps:
       pwsh: true
     env:
       API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH: $(Build.SourcesDirectory)/${{ parameters.apimServiceOutputFolderPath }}
-  
+
   - task: PowerShell@2
     displayName: Print configuration file
     condition: and(succeeded(), ne('${{ parameters.configurationFilePath }}', ''))
@@ -227,9 +216,8 @@ steps:
     env:
       CONFIGURATION_YAML_PATH: $(Build.SourcesDirectory)/${{ parameters.apimServiceOutputFolderPath }}/${{ parameters.configurationFilePath }}
 
-
   - task: PowerShell@2
-    displayName: "Deploy: Run publisher for ${{ parameters.environment }} environment"
+    displayName: "Plan: Dry-run publisher for ${{ parameters.environment }} environment"
     inputs:
       targetType: "inline"
       script: |
@@ -239,11 +227,13 @@ steps:
         $InformationPreference = "Continue"
 
         Write-Host "=========================================="
-        Write-Host "API-Ops Deploy (Applying Changes)"
+        Write-Host "API-Ops Plan (Dry-Run Mode)"
         Write-Host "=========================================="
         Write-Host "Environment: ${{ parameters.environment }}"
         Write-Host "APIM Service: ${{ parameters.apimServiceName }}"
         Write-Host "Resource Group: ${{ parameters.resourceGroupName }}"
+        Write-Host "Dry-Run: true (no changes will be made)"
+        Write-Host "Strict Validation: ${{ parameters.strictValidation }}"
         Write-Host "=========================================="
         Write-Host ""
 
@@ -253,22 +243,25 @@ steps:
         if ($exitCode -ne 0) { 
           Write-Host ""
           Write-Host "=========================================="
-          Write-Host "Deploy FAILED"
+          Write-Host "Plan FAILED - Validation errors detected"
           Write-Host "=========================================="
-          throw "Running publisher failed with exit code: $exitCode"
+          throw "Running publisher in dry-run mode failed with exit code: $exitCode"
         }
 
         Write-Host ""
         Write-Host "=========================================="
-        Write-Host "Deploy SUCCEEDED"
+        Write-Host "Plan SUCCEEDED - Changes validated"
         Write-Host "=========================================="
-        Write-Host "Changes have been applied to APIM."
+        Write-Host "The changes have been validated successfully."
+        Write-Host "No changes were made to APIM."
+        Write-Host "Proceed to the Deploy stage to apply changes."
         Write-Host "=========================================="
 
         Write-Information "Execution complete."
       failOnStderr: true
       pwsh: true
     env:
+      # Core APIM Configuration
       API_SPECIFICATION_FORMAT: ${{ parameters.configurationFileFormat }}
       AZURE_BEARER_TOKEN: $(AZURE_BEARER_TOKEN)
       AZURE_CLIENT_ID: $(AZURE_CLIENT_ID)
@@ -279,8 +272,12 @@ steps:
       API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH: $(Build.SourcesDirectory)/${{ parameters.apimServiceOutputFolderPath }}
       API_MANAGEMENT_SERVICE_NAME: ${{ parameters.apimServiceName }}
       CONFIGURATION_YAML_PATH: $(Build.SourcesDirectory)/${{ parameters.apimServiceOutputFolderPath }}/${{ parameters.configurationFilePath }}
-      Logging__LogLevel__Default: "Trace"
+      # Dry-Run Mode (v7.0.0+ feature)
+      DRY_RUN: "true"
+      # Strict Validation (v7.0.0+ feature)
+      STRICT_VALIDATION: "${{ parameters.strictValidation }}"
+      # Logging
+      Logging__LogLevel__Default: "Information"
       ARM_API_VERSION: "2024-05-01"
       ${{ if ne( parameters['commitId'], '' ) }}:
         COMMIT_ID: ${{ parameters.commitId }}
-        

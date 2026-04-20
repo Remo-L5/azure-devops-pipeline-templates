@@ -22,18 +22,42 @@ parameters:
   #       serviceConnectionNameTfApply: 'sc-alz-mgmt-apply'
   #       backendStateVariableGroup: 'alz-mgmt'
   #       terraformWorkspace: 'dev'
+  #
+  #   # API-Ops with Plan/Deploy workflow (similar to Terraform)
+  #   # Requires API-Ops v7.0.0+ for dry-run support
   #   - name: 'publisher-dev'
   #     projectType: 'api-ops'
   #     dependencies:
   #       - function-dev
+  #     # Optional: Skip plan stage for direct deployment (backwards compatibility)
+  #     # skipPlanStage: false
+  #     # Optional: Custom stage names (defaults to plan_<name> and <name>)
+  #     # planStageName: 'plan_publisher_dev'
+  #     # planStageDisplayName: 'Plan Publisher Dev'
+  #     # deployStageName: 'deploy_publisher_dev'
+  #     # deployStageDisplayName: 'Deploy Publisher Dev'
+  #     # Optional: Environment names for approvals
+  #     # planEnvironment: 'apiops-plan'
+  #     # deployEnvironment: 'apiops-deploy'
   #     projectSpecs:
   #       serviceConnectionName: 'sc-apiops'
   #       apimServiceOutputFolderPath: 'dist/apim'
   #       environment: 'dev'
   #       resourceGroupName: 'rg-api-dev'
-  #       apiManagementServiceBaseName: 'contoso-apim'
-  #       configurationYamlPath: ''
+  #       apimServiceName: 'contoso-apim-dev'
+  #       # Optional: Only needed if service connection is not scoped to a subscription
+  #       # subscriptionId: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+  #       configurationFilePath: 'configuration.yaml'
+  #       configurationFileFormat: 'Yaml'
   #       commitId: 'publish-artifacts-in-last-commit'
+  #       apiopsReleaseVersion: 'v7.0.0-rc.1.0.0'
+  #       # Strict validation (v7.0.0+ feature)
+  #       strictValidation: true
+  #       # Pool and environment overrides
+  #       poolName: 'ado-devops-pool'
+  #       planEnvironment: 'apiops-plan'
+  #       deployEnvironment: 'apiops-deploy'
+  #
   #   - name: 'function-dev'
   #     projectType: 'dotnet'
   #     dependencies:
@@ -41,7 +65,39 @@ parameters:
   #     projectSpecs:
   #       webAppProjectsPath: '**/*.csproj'
   #       zipArtifactName: 'function-app-artifact'
-  #       dotnetVersion: '8.x'
+  #       dotnetVersion: '9.x'
+  #
+  #   # API Center Registration (register APIs to Azure API Center)
+  #   # Based on: https://learn.microsoft.com/en-us/azure/api-center/register-apis-github-actions
+  #   - name: 'apicenter-dev'
+  #     projectType: 'api-center'
+  #     dependencies:
+  #       - publisher-dev
+  #     # Optional: Skip validate stage for direct registration
+  #     # skipValidateStage: false
+  #     # Optional: Custom stage names
+  #     # validateStageName: 'validate_apicenter_dev'
+  #     # validateStageDisplayName: 'Validate API Center Dev'
+  #     # registerStageName: 'register_apicenter_dev'
+  #     # registerStageDisplayName: 'Register API Center Dev'
+  #     # Optional: Environment names for approvals
+  #     # validateEnvironment: 'apicenter-validate'
+  #     # registerEnvironment: 'apicenter-register'
+  #     projectSpecs:
+  #       serviceConnectionName: 'sc-apicenter'
+  #       apisFolderPath: 'APIs'                    # Folder containing API definitions
+  #       resourceGroupName: 'rg-apicenter-dev'
+  #       apiCenterServiceName: 'contoso-apicenter-dev'
+  #       # Optional: Only needed if service connection is not scoped to a subscription
+  #       # subscriptionId: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+  #       apiDefinitionPattern: '**/*.yaml'        # Glob pattern for API files
+  #       metadataFilePath: 'metadata.json'        # Optional: metadata file name in each API folder
+  #       authorizationFilePath: 'authorization.json'  # Optional: deployment/auth config in each API folder
+  #       registerOnlyChanged: true                # Only register APIs that changed
+  #       # Pool and environment overrides
+  #       poolName: 'ado-devops-pool'
+  #       validateEnvironment: 'apicenter-validate'
+  #       registerEnvironment: 'apicenter-register'
 
 
 stages:
@@ -72,17 +128,31 @@ stages:
               dependencies: ${{ coalesce(project.dependencies, parameters.emptyDependencyList) }}
               projectSpecs: ${{ project.projectSpecs }}
               name: ${{ project.name }}
-              # serviceConnectionName: ${{ coalesce(project.projectSpecs.serviceConnectionName, 'sc-apiops') }}
-              # apimServiceOutputFolderPath: ${{ coalesce(project.projectSpecs.apimServiceOutputFolderPath, 'dist/apim') }}
-              # environment: ${{ coalesce(project.projectSpecs.environment, 'dev') }}
-              # resourceGroupName: ${{ coalesce(project.projectSpecs.resourceGroupName, 'rg-api-dev') }}
-              # apiManagementServiceBaseName: ${{ coalesce(project.projectSpecs.apiManagementServiceBaseName, 'contoso-apim') }}
-              # configurationYamlPath: ${{ coalesce(project.projectSpecs.configurationYamlPath, '') }}
-              # commitId: ${{ coalesce(project.projectSpecs.commitId, 'publish-artifacts-in-last-commit') }}
-              # dependsOn: ${{ coalesce(project.dependencies, parameters.emptyDependencyList) }}
+              # Plan/Deploy workflow parameters (similar to Terraform)
+              skipPlanStage: ${{ coalesce(project.skipPlanStage, false) }}
+              planStageName: ${{ coalesce(project.planStageName, '') }}
+              planStageDisplayName: ${{ coalesce(project.planStageDisplayName, '') }}
+              deployStageName: ${{ coalesce(project.deployStageName, '') }}
+              deployStageDisplayName: ${{ coalesce(project.deployStageDisplayName, '') }}
+              planEnvironment: ${{ coalesce(project.planEnvironment, 'apiops-plan') }}
+              deployEnvironment: ${{ coalesce(project.deployEnvironment, 'apiops-deploy') }}
       - ${{ if eq(project.projectType, 'dotnet') }}:
           - template: helpers/dotnet/dotnet.yaml
             parameters: ${{ project.projectSpecs }}
               # webAppProjectsPath: ${{ coalesce(project.projectSpecs.webAppProjectsPath, '**/*.csproj') }}
               # zipArtifactName: ${{ coalesce(project.projectSpecs.zipArtifactName, 'NOT_SET') }}
-              # dotnetVersion: ${{ coalesce(project.projectSpecs.dotnetVersion, '8.x') }}
+              # dotnetVersion: ${{ coalesce(project.projectSpecs.dotnetVersion, '9.x') }}
+      - ${{ if eq(project.projectType, 'api-center') }}:
+          - template: helpers/api-center/api-center.yaml
+            parameters: 
+              dependencies: ${{ coalesce(project.dependencies, parameters.emptyDependencyList) }}
+              projectSpecs: ${{ project.projectSpecs }}
+              name: ${{ project.name }}
+              # Validate/Register workflow parameters (similar to API-Ops plan/deploy)
+              skipValidateStage: ${{ coalesce(project.skipValidateStage, false) }}
+              validateStageName: ${{ coalesce(project.validateStageName, '') }}
+              validateStageDisplayName: ${{ coalesce(project.validateStageDisplayName, '') }}
+              registerStageName: ${{ coalesce(project.registerStageName, '') }}
+              registerStageDisplayName: ${{ coalesce(project.registerStageDisplayName, '') }}
+              validateEnvironment: ${{ coalesce(project.validateEnvironment, 'apicenter-validate') }}
+              registerEnvironment: ${{ coalesce(project.registerEnvironment, 'apicenter-register') }}

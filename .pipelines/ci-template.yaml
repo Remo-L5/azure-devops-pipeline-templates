@@ -19,6 +19,12 @@ parameters:
   - name: moduleAliases
     type: object
     default: []
+  - name: poolName
+    type: string
+    default: 'alz-mgmt'
+  - name: environmentName
+    type: string
+    default: 'alz-mgmt-plan'
 
 variables:
   - group: ${{ parameters.backendStateVariableGroup }}
@@ -32,7 +38,7 @@ stages:
       - job: validate
         displayName: Validate Terraform
         pool:
-          name: alz-mgmt
+          name: ${{ parameters.poolName }}
         steps:
           - template: helpers/terraform-installer.yaml
             parameters:
@@ -58,8 +64,8 @@ stages:
         dependsOn: validate
         displayName: Validate Terraform Plan
         pool:
-          name: alz-mgmt
-        environment: alz-mgmt-plan
+          name: ${{ parameters.poolName }}
+        environment: ${{ parameters.environmentName }}
         timeoutInMinutes: 0
         strategy:
           runOnce:

@@ -1,4 +1,11 @@
 ---
+# API-Ops Template with Plan/Deploy Workflow
+# Similar to Terraform's plan/apply pattern, this template provides:
+#   - Plan Stage: Validates changes using dry-run mode (no modifications to APIM)
+#   - Deploy Stage: Applies the validated changes to APIM
+#
+# Requires API-Ops v7.0.0 or later for dry-run support.
+
 parameters:
   - name: name
     type: string
@@ -8,17 +15,97 @@ parameters:
   - name: projectSpecs
     type: object
     default: {}
+  # Plan/Deploy stage naming (similar to Terraform)
+  - name: planStageName
+    type: string
+    default: ''
+  - name: planStageDisplayName
+    type: string
+    default: ''
+  - name: deployStageName
+    type: string
+    default: ''
+  - name: deployStageDisplayName
+    type: string
+    default: ''
+  # Skip plan stage if desired (for backwards compatibility or quick deployments)
+  - name: skipPlanStage
+    type: boolean
+    default: false
+  # Environment approval settings
+  - name: planEnvironment
+    type: string
+    default: 'apiops-plan'
+  - name: deployEnvironment
+    type: string
+    default: 'apiops-deploy'
+  # Pool name - change this default when forking the repo
+  - name: poolName
+    type: string
+    default: 'ado-devops-pool'
 
 stages:
-  - stage: ${{ parameters.name }}
-    displayName: ${{ coalesce(parameters.projectSpecs.stageDisplayName, format('Publish {0}', parameters.name)) }}
-    ${{ if gt(length(parameters.dependencies), 0) }}:
-      dependsOn: ${{ parameters.dependencies }}
+  # ============================================================================
+  # PLAN STAGE - Validates changes without modifying APIM (dry-run)
+  # ============================================================================
+  - ${{ if eq(parameters.skipPlanStage, false) }}:
+    - stage: ${{ coalesce(parameters.planStageName, format('plan_{0}', parameters.name)) }}
+      displayName: ${{ coalesce(parameters.planStageDisplayName, format('Plan {0}', parameters.name)) }}
+      ${{ if gt(length(parameters.dependencies), 0) }}:
+        dependsOn: ${{ parameters.dependencies }}
+      jobs:
+        - deployment: plan
+          displayName: Plan API-Ops Changes (Dry-Run)
+          pool:
+            name: ${{ coalesce(parameters.projectSpecs.poolName, parameters.poolName) }}
+          environment: ${{ coalesce(parameters.projectSpecs.planEnvironment, parameters.planEnvironment) }}
+          strategy:
+            runOnce:
+              deploy:
+                steps:
+                  - template: plan.yaml
+                    parameters:
+                      serviceConnectionName: ${{ parameters.projectSpecs.serviceConnectionName }}
+                      apimServiceOutputFolderPath: ${{ coalesce(parameters.projectSpecs.apimServiceOutputFolderPath, 'artifacts') }}
+                      environment: ${{ coalesce(parameters.projectSpecs.environment, 'dev') }}
+                      resourceGroupName: ${{ parameters.projectSpecs.resourceGroupName }}
+                      apimServiceName: ${{ parameters.projectSpecs.apimServiceName }}
+                      subscriptionId: ${{ coalesce(parameters.projectSpecs.subscriptionId, '') }}
+                      configurationFileFormat: ${{ coalesce(parameters.projectSpecs.configurationFileFormat, 'Yaml') }}
+                      configurationFilePath: ${{ coalesce(parameters.projectSpecs.configurationFilePath, '') }}
+                      commitId: ${{ coalesce(parameters.projectSpecs.commitId, '') }}
+                      apiopsReleaseVersion: ${{ coalesce(parameters.projectSpecs.apiopsReleaseVersion, 'v7.0.0-rc.1.0.0') }}
+                      strictValidation: ${{ coalesce(parameters.projectSpecs.strictValidation, true) }}
+
+  # ============================================================================
+  # DEPLOY STAGE - Applies changes to APIM
+  # ============================================================================
+  - stage: ${{ coalesce(parameters.deployStageName, parameters.name) }}
+    displayName: ${{ coalesce(parameters.deployStageDisplayName, format('Deploy {0}', parameters.name)) }}
+    ${{ if eq(parameters.skipPlanStage, false) }}:
+      dependsOn: ${{ coalesce(parameters.planStageName, format('plan_{0}', parameters.name)) }}
+    ${{ if eq(parameters.skipPlanStage, true) }}:
+      ${{ if gt(length(parameters.dependencies), 0) }}:
+        dependsOn: ${{ parameters.dependencies }}
     jobs:
-      - job: ${{ coalesce(parameters.projectSpecs.jobName, format('apiops_{0}', parameters.name)) }}
-        displayName: ${{ coalesce(parameters.projectSpecs.jobDisplayName, 'Run API Ops Publisher') }}
+      - deployment: deploy
+        displayName: Deploy API-Ops Changes
         pool:
-          name: ${{ coalesce(parameters.projectSpecs.poolName, 'ado-devops-pool') }}
-        steps:
-          - template: publish.yaml
-            parameters: ${{ parameters.projectSpecs }}
+          name: ${{ coalesce(parameters.projectSpecs.poolName, parameters.poolName) }}
+        environment: ${{ coalesce(parameters.projectSpecs.deployEnvironment, parameters.deployEnvironment) }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - template: publish.yaml
+                  parameters:
+                    serviceConnectionName: ${{ parameters.projectSpecs.serviceConnectionName }}
+                    apimServiceOutputFolderPath: ${{ coalesce(parameters.projectSpecs.apimServiceOutputFolderPath, 'artifacts') }}
+                    environment: ${{ coalesce(parameters.projectSpecs.environment, 'dev') }}
+                    resourceGroupName: ${{ parameters.projectSpecs.resourceGroupName }}
+                    apimServiceName: ${{ parameters.projectSpecs.apimServiceName }}
+                    subscriptionId: ${{ coalesce(parameters.projectSpecs.subscriptionId, '') }}
+                    configurationFileFormat: ${{ coalesce(parameters.projectSpecs.configurationFileFormat, 'Yaml') }}
+                    configurationFilePath: ${{ coalesce(parameters.projectSpecs.configurationFilePath, '') }}
+                    commitId: ${{ coalesce(parameters.projectSpecs.commitId, '') }}
+                    apiopsReleaseVersion: ${{ coalesce(parameters.projectSpecs.apiopsReleaseVersion, 'v7.0.0-rc.1.0.0') }}

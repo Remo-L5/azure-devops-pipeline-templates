@@ -58,6 +58,16 @@ parameters:
   - name: moduleAliases
     type: object
     default: []
+  # Pool and environment settings - change these defaults when forking the repo
+  - name: poolName
+    type: string
+    default: 'ado-devops-pool'
+  - name: planEnvironment
+    type: string
+    default: 'alz-mgmt-plan'
+  - name: applyEnvironment
+    type: string
+    default: 'alz-mgmt-apply'
   - name: additionalVarFilesDirectory
     type: string
     default: ''
@@ -85,8 +95,8 @@ stages:
       - deployment: plan
         displayName: Plan with Terraform
         pool:
-          name: ado-devops-pool
-        environment: alz-mgmt-plan
+          name: ${{ parameters.poolName }}
+        environment: ${{ parameters.planEnvironment }}
         timeoutInMinutes: 0
         strategy:
           runOnce:
@@ -196,8 +206,8 @@ stages:
       - deployment: apply
         displayName: Apply with Terraform
         pool:
-          name: ado-devops-pool
-        environment: alz-mgmt-apply
+          name: ${{ parameters.poolName }}
+        environment: ${{ parameters.applyEnvironment }}
         timeoutInMinutes: 0
         strategy:
           runOnce:

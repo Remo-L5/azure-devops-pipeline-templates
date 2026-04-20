@@ -1,0 +1,111 @@
+---
+# API Center Registration Template
+# Registers APIs to Azure API Center from API definition files in a specified folder.
+# Similar to API-Ops pattern, this template provides:
+#   - Validate Stage: Validates API definitions before registration (optional)
+#   - Register Stage: Registers APIs to Azure API Center
+#
+# Based on: https://learn.microsoft.com/en-us/azure/api-center/register-apis-github-actions
+
+parameters:
+  - name: name
+    type: string
+  - name: dependencies
+    type: object
+    default: []
+  - name: projectSpecs
+    type: object
+    default: {}
+  # Validate/Register stage naming (similar to Terraform plan/apply pattern)
+  - name: validateStageName
+    type: string
+    default: ''
+  - name: validateStageDisplayName
+    type: string
+    default: ''
+  - name: registerStageName
+    type: string
+    default: ''
+  - name: registerStageDisplayName
+    type: string
+    default: ''
+  # Skip validation stage if desired (for quick deployments)
+  - name: skipValidateStage
+    type: boolean
+    default: false
+  # Environment approval settings
+  - name: validateEnvironment
+    type: string
+    default: 'apicenter-validate'
+  - name: registerEnvironment
+    type: string
+    default: 'apicenter-register'
+  # Pool name - change this default when forking the repo
+  - name: poolName
+    type: string
+    default: 'ado-devops-pool'
+
+stages:
+  # ============================================================================
+  # VALIDATE STAGE - Validates API definitions before registration
+  # ============================================================================
+  - ${{ if eq(parameters.skipValidateStage, false) }}:
+    - stage: ${{ coalesce(parameters.validateStageName, format('validate_{0}', parameters.name)) }}
+      displayName: ${{ coalesce(parameters.validateStageDisplayName, format('Validate {0}', parameters.name)) }}
+      ${{ if gt(length(parameters.dependencies), 0) }}:
+        dependsOn: ${{ parameters.dependencies }}
+      jobs:
+        - deployment: validate
+          displayName: Validate API Definitions
+          pool:
+            name: ${{ coalesce(parameters.projectSpecs.poolName, parameters.poolName) }}
+          environment: ${{ coalesce(parameters.projectSpecs.validateEnvironment, parameters.validateEnvironment) }}
+          strategy:
+            runOnce:
+              deploy:
+                steps:
+                  - template: validate.yaml
+                    parameters:
+                      serviceConnectionName: ${{ parameters.projectSpecs.serviceConnectionName }}
+                      apisFolderPath: ${{ coalesce(parameters.projectSpecs.apisFolderPath, 'APIs') }}
+                      resourceGroupName: ${{ parameters.projectSpecs.resourceGroupName }}
+                      apiCenterServiceName: ${{ parameters.projectSpecs.apiCenterServiceName }}
+                      subscriptionId: ${{ coalesce(parameters.projectSpecs.subscriptionId, '') }}
+                      apiDefinitionPattern: ${{ coalesce(parameters.projectSpecs.apiDefinitionPattern, '**/*.json') }}
+                      enableSpectral: ${{ coalesce(parameters.projectSpecs.enableSpectral, true) }}
+                      spectralRulesetPath: ${{ coalesce(parameters.projectSpecs.spectralRulesetPath, '') }}
+                      spectralFailSeverity: ${{ coalesce(parameters.projectSpecs.spectralFailSeverity, 'error') }}
+                      apicExtensionVersion: ${{ coalesce(parameters.projectSpecs.apicExtensionVersion, '1.0.0b5') }}
+
+  # ============================================================================
+  # REGISTER STAGE - Registers APIs to Azure API Center
+  # ============================================================================
+  - stage: ${{ coalesce(parameters.registerStageName, parameters.name) }}
+    displayName: ${{ coalesce(parameters.registerStageDisplayName, format('Register {0}', parameters.name)) }}
+    ${{ if eq(parameters.skipValidateStage, false) }}:
+      dependsOn: ${{ coalesce(parameters.validateStageName, format('validate_{0}', parameters.name)) }}
+    ${{ if eq(parameters.skipValidateStage, true) }}:
+      ${{ if gt(length(parameters.dependencies), 0) }}:
+        dependsOn: ${{ parameters.dependencies }}
+    jobs:
+      - deployment: register
+        displayName: Register APIs to API Center
+        pool:
+          name: ${{ coalesce(parameters.projectSpecs.poolName, parameters.poolName) }}
+        environment: ${{ coalesce(parameters.projectSpecs.registerEnvironment, parameters.registerEnvironment) }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - template: register.yaml
+                  parameters:
+                    serviceConnectionName: ${{ parameters.projectSpecs.serviceConnectionName }}
+                    apisFolderPath: ${{ coalesce(parameters.projectSpecs.apisFolderPath, 'APIs') }}
+                    resourceGroupName: ${{ parameters.projectSpecs.resourceGroupName }}
+                    apiCenterServiceName: ${{ parameters.projectSpecs.apiCenterServiceName }}
+                    subscriptionId: ${{ coalesce(parameters.projectSpecs.subscriptionId, '') }}
+                    apiDefinitionPattern: ${{ coalesce(parameters.projectSpecs.apiDefinitionPattern, '**/*.json') }}
+                    metadataFilePath: ${{ coalesce(parameters.projectSpecs.metadataFilePath, '') }}
+                    authorizationFilePath: ${{ coalesce(parameters.projectSpecs.authorizationFilePath, '') }}
+                    registerOnlyChanged: ${{ coalesce(parameters.projectSpecs.registerOnlyChanged, true) }}
+                    apicExtensionVersion: ${{ coalesce(parameters.projectSpecs.apicExtensionVersion, '1.0.0b5') }}
