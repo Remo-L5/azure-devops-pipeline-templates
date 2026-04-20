@@ -8,10 +8,14 @@ parameters:
     default: 'NOT_SET'
   - name: dotnetVersion
     type: string
-    default: '8.x'
+    default: '9.x'
   - name: dotnetStageDependsOn
     type: object
     default: []
+  # Pool name - change this default when forking the repo
+  - name: poolName
+    type: string
+    default: 'ado-devops-pool'
 
 stages:
   - stage: dotnet
@@ -20,6 +24,8 @@ stages:
       dependsOn: ${{ parameters.dotnetStageDependsOn }}
     jobs:
       - job: build_project
+        pool:
+          name: ${{ parameters.poolName }}
         steps:
         - task: UseDotNet@2
           displayName: 'Install .NET Core SDK'
