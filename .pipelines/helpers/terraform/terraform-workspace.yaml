@@ -2,6 +2,8 @@ parameters:
  - name: terraformWorkspace
    type: string
  - name: serviceConnection
+ - name: root_module_folder_relative_path
+   default: '.'
 
 steps:
 - task: AzureCLI@2
@@ -13,6 +15,15 @@ steps:
     addSpnToEnvironment: true
     inlineScript: |
       $workspaceName="${{ parameters.terraformWorkspace }}"
+      $modulePath = Join-Path $env:PIPELINE_WORKSPACE 'src'
+      if ('${{ parameters.root_module_folder_relative_path }}' -and
+        '${{ parameters.root_module_folder_relative_path }}' -ne '.' -and
+        '${{ parameters.root_module_folder_relative_path }}' -ne '') {
+        $modulePath = Join-Path $modulePath "${{ parameters.root_module_folder_relative_path }}"
+      }
+            
+      # Change to module path before running workspace commands
+      Push-Location $modulePath
             
       # Check if the workspace exists
       

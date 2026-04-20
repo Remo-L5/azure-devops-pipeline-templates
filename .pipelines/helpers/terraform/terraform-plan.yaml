@@ -15,6 +15,14 @@ parameters:
   - name: downloadedArtifactLocalPath
     type: string
     default: ''
+  - name: additionalVarFilesDirectory
+    type: string
+    default: ''
+    displayName: 'Directory to scan for additional var files'
+  - name: additionalVarFilesPattern
+    type: string
+    default: '*.tfvars'
+    displayName: 'File pattern to match additional var files'
 
 steps:
   - task: AzureCLI@2
@@ -41,8 +49,17 @@ steps:
 
         # Run Terraform Plan
         $command = "terraform"
+        $modulePath = Join-Path $env:PIPELINE_WORKSPACE 'src'
+        if ('${{ parameters.root_module_folder_relative_path }}' -and
+          '${{ parameters.root_module_folder_relative_path }}' -ne '.' -and
+          '${{ parameters.root_module_folder_relative_path }}' -ne '') {
+          $modulePath = Join-Path $modulePath "${{ parameters.root_module_folder_relative_path }}"
+        }
+              
+        # Change to module path before running workspace commands
+        Push-Location $modulePath
         $arguments = @()
-        $arguments += "-chdir=${{ parameters.rootModuleFolderRelativePath }}"
+        $arguments += "-chdir=$modulePath"
         $arguments += "plan"
         $arguments += "-out=tfplan"
         $arguments += "-input=false"
@@ -55,8 +72,8 @@ steps:
             
             # Construct the full path to the var file
             $rootModulePath = "${{ parameters.rootModuleFolderRelativePath }}"
-            $varFilePath = Join-Path -Path $rootModulePath -ChildPath $terraformVarFileName
-            
+            $varFilePath = Join-Path -Path $modulePath -ChildPath $terraformVarFileName
+
             # Check if the specified var file exists
             if (Test-Path -Path $varFilePath -PathType Leaf) {
                 Write-Host "Found var file: $varFilePath"
@@ -73,7 +90,7 @@ steps:
                 Write-Host "Variable file mode: Skipping CLI variables (terraformOverrideVars will be ignored)"
             } else {
                 Write-Error "##vso[task.logissue type=error]Specified terraform var file not found: $varFilePath"
-                Write-Error "The terraform variable file '$terraformVarFileName' does not exist in the root module path '$rootModulePath'."
+                Write-Error "The terraform variable file '$terraformVarFileName' does not exist in the module path '$modulePath'."
                 Write-Error "Please ensure the file exists or remove the terraformVarFileName parameter to use CLI variables instead."
                 exit 1
             }
@@ -120,6 +137,37 @@ steps:
           $arguments += "-destroy"
         }
 
+        # Process additional var files from directory with pattern
+        $additionalVarFilesDir = $env:ADDITIONAL_VAR_FILES_DIRECTORY
+        $additionalVarFilesPattern = $env:ADDITIONAL_VAR_FILES_PATTERN
+        
+        if ($null -ne $additionalVarFilesDir -and $additionalVarFilesDir.Trim() -ne '') {
+            # Resolve the directory path (can be absolute or relative to module path)
+            $varFilesPath = $additionalVarFilesDir
+            if (-not [System.IO.Path]::IsPathRooted($varFilesPath)) {
+                $varFilesPath = Join-Path -Path $modulePath -ChildPath $additionalVarFilesDir
+            }
+            
+            Write-Host "Scanning for additional var files in: $varFilesPath"
+            Write-Host "Using pattern: $additionalVarFilesPattern"
+            
+            if (Test-Path -Path $varFilesPath -PathType Container) {
+                $matchingFiles = Get-ChildItem -Path $varFilesPath -Filter $additionalVarFilesPattern -File | Sort-Object Name
+                
+                if ($matchingFiles.Count -gt 0) {
+                    Write-Host "Found $($matchingFiles.Count) matching var file(s):"
+                    foreach ($varFile in $matchingFiles) {
+                        Write-Host "  - $($varFile.Name)"
+                        $arguments += "-var-file=$($varFile.FullName)"
+                    }
+                } else {
+                    Write-Host "No files matching pattern '$additionalVarFilesPattern' found in '$varFilesPath'"
+                }
+            } else {
+                Write-Warning "Additional var files directory not found: $varFilesPath"
+            }
+        }
+
         Write-Host "Running: $command $arguments"
         & $command $arguments
 
@@ -127,5 +175,7 @@ steps:
       TERRAFORM_ACTION: ${{ coalesce(parameters.terraformAction, 'apply') }}
       TERRAFORM_OVERRIDE_VARS: ${{ convertToJson(parameters.terraformOverrideVars) }}
       TERRAFORM_VAR_FILE_NAME: ${{ parameters.terraformVarFileName }}
+      ADDITIONAL_VAR_FILES_DIRECTORY: ${{ parameters.additionalVarFilesDirectory }}
+      ADDITIONAL_VAR_FILES_PATTERN: ${{ parameters.additionalVarFilesPattern }}
       ${{ if ne(parameters.downloadedArtifactLocalPath, '') }}:
         TF_VAR_artifact_local_path: ${{ parameters.downloadedArtifactLocalPath }}

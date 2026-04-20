@@ -32,8 +32,18 @@ steps:
         $env:ARM_CLIENT_ID = $clientId
         $env:ARM_USE_AZUREAD = "true"
 
+        # start with build sources directory (src checkout) and append root folder only if
+        # it is not '.' or empty. this avoids paths like
+        # C:\agent\_work\1\s\. which are treated as rooted.
+        $modulePath = Join-Path $env:PIPELINE_WORKSPACE 'src'
+        if ('${{ parameters.root_module_folder_relative_path }}' -and
+          '${{ parameters.root_module_folder_relative_path }}' -ne '.' -and
+          '${{ parameters.root_module_folder_relative_path }}' -ne '') {
+          $modulePath = Join-Path $modulePath "${{ parameters.root_module_folder_relative_path }}"
+        }
+
         $arguments = @()
-        $arguments += "-chdir=${{ parameters.rootModuleFolderRelativePath }}"
+        $arguments += "-chdir=$modulePath"
         $arguments += "init"
         $arguments += "-backend-config=storage_account_name=$($env:BACKEND_AZURE_STORAGE_ACCOUNT_NAME)"
         $arguments += "-backend-config=container_name=$($env:BACKEND_AZURE_STORAGE_ACCOUNT_CONTAINER_NAME)"
