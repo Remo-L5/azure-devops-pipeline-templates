@@ -67,6 +67,53 @@ parameters:
   #       zipArtifactName: 'function-app-artifact'
   #       dotnetVersion: '9.x'
   #
+  #   # API-Ops CLI with Plan/Deploy workflow (uses apiops-cli Node.js tool)
+  #   # Replaces 'api-ops' projectType — same Plan/Deploy pattern, different toolchain.
+  #   # Migration notes:
+  #   #   apimServiceOutputFolderPath  →  artifactsFolderPath   (default: apim-artifacts)
+  #   #   configurationFilePath        →  overridesFilePath     (optional per-env overrides yaml)
+  #   #   configurationFileFormat      →  (removed)
+  #   #   apiopsReleaseVersion         →  apiopsCliVersion      (npm version, default: latest)
+  #   #   strictValidation             →  (removed)
+  #   #   commitId                     →  commitId              (now expects a real git SHA,
+  #   #                                                          e.g. $(Build.SourceVersion))
+  #   # Requires: Node.js 22+ on the agent and npm access to @peterhauge/apiops-cli
+  #   # See: https://github.com/Azure/apiops-cli
+  #   - name: 'publisher-dev'
+  #     projectType: 'api-ops-cli'
+  #     dependencies:
+  #       - function-dev
+  #     # Optional: Skip plan stage for direct deployment (backwards compatibility)
+  #     # skipPlanStage: false
+  #     # Optional: Custom stage names (defaults to plan_<name> and <name>)
+  #     # planStageName: 'plan_publisher_dev'
+  #     # planStageDisplayName: 'Plan Publisher Dev'
+  #     # deployStageName: 'deploy_publisher_dev'
+  #     # deployStageDisplayName: 'Deploy Publisher Dev'
+  #     # Optional: Environment names for approvals
+  #     # planEnvironment: 'apiops-plan'
+  #     # deployEnvironment: 'apiops-deploy'
+  #     projectSpecs:
+  #       serviceConnectionName: 'sc-apiops'
+  #       artifactsFolderPath: 'apim-artifacts'
+  #       environment: 'dev'
+  #       resourceGroupName: 'rg-api-dev'
+  #       apimServiceName: 'contoso-apim-dev'
+  #       # Optional: Only needed if service connection is not scoped to a subscription
+  #       # subscriptionId: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+  #       # Optional: Per-environment overrides file (relative to artifactsFolderPath)
+  #       # overridesFilePath: 'configuration.dev.yaml'
+  #       # Optional: Incremental publish — pass $(Build.SourceVersion) for CI pipelines
+  #       # commitId: '$(Build.SourceVersion)'
+  #       # Optional: Pin CLI version (default: latest)
+  #       # apiopsCliVersion: '0.2.1-alpha.0'
+  #       # Optional: Override API spec format
+  #       # specFormat: 'openapi-v3-yaml'
+  #       # Pool and environment overrides
+  #       poolName: 'ado-devops-pool'
+  #       planEnvironment: 'apiops-plan'
+  #       deployEnvironment: 'apiops-deploy'
+  #
   #   # API Center Registration (register APIs to Azure API Center)
   #   # Based on: https://learn.microsoft.com/en-us/azure/api-center/register-apis-github-actions
   #   - name: 'apicenter-dev'
@@ -142,6 +189,20 @@ stages:
               # webAppProjectsPath: ${{ coalesce(project.projectSpecs.webAppProjectsPath, '**/*.csproj') }}
               # zipArtifactName: ${{ coalesce(project.projectSpecs.zipArtifactName, 'NOT_SET') }}
               # dotnetVersion: ${{ coalesce(project.projectSpecs.dotnetVersion, '9.x') }}
+      - ${{ if eq(project.projectType, 'api-ops-cli') }}:
+          - template: helpers/api-ops-cli/api-ops-cli.yaml
+            parameters:
+              dependencies: ${{ coalesce(project.dependencies, parameters.emptyDependencyList) }}
+              projectSpecs: ${{ project.projectSpecs }}
+              name: ${{ project.name }}
+              # Plan/Deploy workflow parameters (mirrors api-ops projectType)
+              skipPlanStage: ${{ coalesce(project.skipPlanStage, false) }}
+              planStageName: ${{ coalesce(project.planStageName, '') }}
+              planStageDisplayName: ${{ coalesce(project.planStageDisplayName, '') }}
+              deployStageName: ${{ coalesce(project.deployStageName, '') }}
+              deployStageDisplayName: ${{ coalesce(project.deployStageDisplayName, '') }}
+              planEnvironment: ${{ coalesce(project.planEnvironment, 'apiops-plan') }}
+              deployEnvironment: ${{ coalesce(project.deployEnvironment, 'apiops-deploy') }}
       - ${{ if eq(project.projectType, 'api-center') }}:
           - template: helpers/api-center/api-center.yaml
             parameters: 

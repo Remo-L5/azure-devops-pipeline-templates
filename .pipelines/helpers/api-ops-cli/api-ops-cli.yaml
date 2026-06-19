@@ -1,0 +1,122 @@
+---
+# API-Ops CLI Template with Plan/Deploy Workflow
+# Uses apiops-cli (Node.js-based CLI) instead of the APIOps Toolkit binaries.
+#
+# Mirrors the api-ops.yaml pattern but targets the new apiops-cli tool:
+#   - Plan Stage: Validates changes using dry-run mode (no modifications to APIM)
+#   - Deploy Stage: Applies the validated changes to APIM
+#
+# See: https://github.com/Azure/apiops-cli
+# Requires Node.js 22+ on the agent and npm access to install @peterhauge/apiops-cli.
+#
+# Migration from api-ops.yaml:
+#   apimServiceOutputFolderPath  →  artifactsFolderPath   (default: apim-artifacts)
+#   configurationFilePath        →  overridesFilePath     (optional per-env overrides yaml)
+#   apiopsReleaseVersion         →  apiopsCliVersion      (npm package version, default: latest)
+#   configurationFileFormat      →  (removed — auto-detected by CLI)
+#   strictValidation             →  (removed — enforced by default)
+#   commitId                     →  commitId              (now expects a real git SHA,
+#                                                          e.g. $(Build.SourceVersion))
+
+parameters:
+  - name: name
+    type: string
+  - name: dependencies
+    type: object
+    default: []
+  - name: projectSpecs
+    type: object
+    default: {}
+  # Plan/Deploy stage naming (mirrors api-ops.yaml pattern)
+  - name: planStageName
+    type: string
+    default: ''
+  - name: planStageDisplayName
+    type: string
+    default: ''
+  - name: deployStageName
+    type: string
+    default: ''
+  - name: deployStageDisplayName
+    type: string
+    default: ''
+  # Skip plan stage if desired (for backwards compatibility or quick deployments)
+  - name: skipPlanStage
+    type: boolean
+    default: false
+  # Environment approval settings
+  - name: planEnvironment
+    type: string
+    default: 'apiops-plan'
+  - name: deployEnvironment
+    type: string
+    default: 'apiops-deploy'
+  # Pool name — change this default when forking the repo
+  - name: poolName
+    type: string
+    default: 'ado-devops-pool'
+
+stages:
+  # ============================================================================
+  # PLAN STAGE — Validates changes without modifying APIM (dry-run)
+  # ============================================================================
+  - ${{ if eq(parameters.skipPlanStage, false) }}:
+    - stage: ${{ coalesce(parameters.planStageName, format('plan_{0}', parameters.name)) }}
+      displayName: ${{ coalesce(parameters.planStageDisplayName, format('Plan {0}', parameters.name)) }}
+      ${{ if gt(length(parameters.dependencies), 0) }}:
+        dependsOn: ${{ parameters.dependencies }}
+      jobs:
+        - deployment: plan
+          displayName: Plan API-Ops CLI Changes (Dry-Run)
+          pool:
+            name: ${{ coalesce(parameters.projectSpecs.poolName, parameters.poolName) }}
+          environment: ${{ coalesce(parameters.projectSpecs.planEnvironment, parameters.planEnvironment) }}
+          strategy:
+            runOnce:
+              deploy:
+                steps:
+                  - template: plan.yaml
+                    parameters:
+                      serviceConnectionName: ${{ parameters.projectSpecs.serviceConnectionName }}
+                      artifactsFolderPath: ${{ coalesce(parameters.projectSpecs.artifactsFolderPath, 'apim-artifacts') }}
+                      environment: ${{ coalesce(parameters.projectSpecs.environment, 'dev') }}
+                      resourceGroupName: ${{ parameters.projectSpecs.resourceGroupName }}
+                      apimServiceName: ${{ parameters.projectSpecs.apimServiceName }}
+                      subscriptionId: ${{ coalesce(parameters.projectSpecs.subscriptionId, '') }}
+                      overridesFilePath: ${{ coalesce(parameters.projectSpecs.overridesFilePath, '') }}
+                      commitId: ${{ coalesce(parameters.projectSpecs.commitId, '') }}
+                      apiopsCliVersion: ${{ coalesce(parameters.projectSpecs.apiopsCliVersion, 'latest') }}
+                      specFormat: ${{ coalesce(parameters.projectSpecs.specFormat, '') }}
+
+  # ============================================================================
+  # DEPLOY STAGE — Applies changes to APIM
+  # ============================================================================
+  - stage: ${{ coalesce(parameters.deployStageName, parameters.name) }}
+    displayName: ${{ coalesce(parameters.deployStageDisplayName, format('Deploy {0}', parameters.name)) }}
+    ${{ if eq(parameters.skipPlanStage, false) }}:
+      dependsOn: ${{ coalesce(parameters.planStageName, format('plan_{0}', parameters.name)) }}
+    ${{ if eq(parameters.skipPlanStage, true) }}:
+      ${{ if gt(length(parameters.dependencies), 0) }}:
+        dependsOn: ${{ parameters.dependencies }}
+    jobs:
+      - deployment: deploy
+        displayName: Deploy API-Ops CLI Changes
+        pool:
+          name: ${{ coalesce(parameters.projectSpecs.poolName, parameters.poolName) }}
+        environment: ${{ coalesce(parameters.projectSpecs.deployEnvironment, parameters.deployEnvironment) }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - template: publish.yaml
+                  parameters:
+                    serviceConnectionName: ${{ parameters.projectSpecs.serviceConnectionName }}
+                    artifactsFolderPath: ${{ coalesce(parameters.projectSpecs.artifactsFolderPath, 'apim-artifacts') }}
+                    environment: ${{ coalesce(parameters.projectSpecs.environment, 'dev') }}
+                    resourceGroupName: ${{ parameters.projectSpecs.resourceGroupName }}
+                    apimServiceName: ${{ parameters.projectSpecs.apimServiceName }}
+                    subscriptionId: ${{ coalesce(parameters.projectSpecs.subscriptionId, '') }}
+                    overridesFilePath: ${{ coalesce(parameters.projectSpecs.overridesFilePath, '') }}
+                    commitId: ${{ coalesce(parameters.projectSpecs.commitId, '') }}
+                    apiopsCliVersion: ${{ coalesce(parameters.projectSpecs.apiopsCliVersion, 'latest') }}
+                    specFormat: ${{ coalesce(parameters.projectSpecs.specFormat, '') }}

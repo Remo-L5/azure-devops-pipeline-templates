@@ -1,0 +1,256 @@
+---
+# API-Ops CLI Publish (Deploy) Step Template
+# Runs apiops publish to apply APIM configuration changes.
+# Use this as part of the Deploy stage after the Plan stage validates changes.
+#
+# Uses apiops-cli (Node.js-based) instead of the APIOps Toolkit binary.
+# Authentication is handled via AzureCLI@2 + DefaultAzureCredential (AzureCliCredential chain).
+#
+# For dry-run validation, use plan.yaml instead.
+# See: https://github.com/Azure/apiops-cli
+
+parameters:
+  - name: serviceConnectionName
+    type: string
+    displayName: Service Connection Name
+  - name: artifactsFolderPath
+    type: string
+    displayName: Folder where the APIM artifacts reside (relative to repo root)
+    default: 'apim-artifacts'
+  - name: environment
+    type: string
+    displayName: Environment label (for display purposes)
+  - name: resourceGroupName
+    type: string
+    displayName: Azure Resource Group Name
+  - name: apimServiceName
+    type: string
+    displayName: APIM Instance Name
+  - name: subscriptionId
+    type: string
+    displayName: Azure Subscription ID override (leave empty to use service connection subscription)
+    default: ''
+  - name: overridesFilePath
+    type: string
+    displayName: Path to per-environment overrides YAML (relative to artifactsFolderPath, e.g. configuration.dev.yaml)
+    default: ''
+  - name: commitId
+    type: string
+    displayName: Git commit SHA for incremental publish — only resources changed in this commit are deployed (leave empty to publish all)
+    default: ''
+  - name: apiopsCliVersion
+    type: string
+    displayName: apiops-cli npm package version (e.g. 'latest' or '0.2.1-alpha.0')
+    default: 'latest'
+  - name: specFormat
+    type: string
+    displayName: Optional API spec format override (e.g. openapi-v3-yaml, openapi-v2-json)
+    default: ''
+
+steps:
+  - script: echo "Deploying API-Ops CLI changes for ${{ parameters.environment }} environment"
+    displayName: Deploy Stage Information
+
+  - checkout: self
+    fetchDepth: 0
+
+  - task: NodeTool@0
+    displayName: 'Use Node.js 22.x'
+    inputs:
+      versionSpec: '22.x'
+
+  - task: PowerShell@2
+    displayName: Install apiops-cli
+    inputs:
+      targetType: inline
+      script: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = "Stop"
+        $VerbosePreference = "Continue"
+        $InformationPreference = "Continue"
+
+        $cliVersion = "${{ parameters.apiopsCliVersion }}"
+        if ([string]::IsNullOrWhiteSpace($cliVersion) -or $cliVersion -eq 'latest') {
+          Write-Information "Installing latest apiops-cli..."
+          npm install -g "@peterhauge/apiops-cli"
+        }
+        else {
+          Write-Information "Installing apiops-cli version $cliVersion..."
+          npm install -g "@peterhauge/apiops-cli@$cliVersion"
+        }
+
+        if ($LASTEXITCODE -ne 0) { throw "Failed to install apiops-cli." }
+
+        Write-Information "apiops-cli installed. Verifying..."
+        apiops --version
+        Write-Information "Installation complete."
+      failOnStderr: true
+      pwsh: true
+
+  - task: AzureCLI@2
+    displayName: Resolve subscription ID
+    inputs:
+      azureSubscription: ${{ parameters.serviceConnectionName }}
+      scriptType: pscore
+      scriptLocation: inlineScript
+      inlineScript: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = "Stop"
+        $VerbosePreference = "Continue"
+        $InformationPreference = "Continue"
+
+        $subscriptionIdOverride = "${{ parameters.subscriptionId }}"
+
+        if (-not [string]::IsNullOrWhiteSpace($subscriptionIdOverride)) {
+          Write-Information "Using subscription ID from parameter override: $subscriptionIdOverride"
+          $subscriptionId = $subscriptionIdOverride
+        }
+        else {
+          Write-Information "Resolving subscription ID from service connection..."
+          $subscriptionId = az account show --query "id" --output tsv 2>$null
+
+          if ([string]::IsNullOrWhiteSpace($subscriptionId)) {
+            Write-Error "Could not determine subscription ID from service connection."
+            Write-Error "Ensure the service connection '${{ parameters.serviceConnectionName }}' is scoped to a subscription,"
+            Write-Error "or provide 'subscriptionId' in projectSpecs as an override."
+            exit 1
+          }
+
+          Write-Information "Resolved subscription ID: $subscriptionId"
+        }
+
+        Write-Host "##vso[task.setvariable variable=APIOPS_SUBSCRIPTION_ID]$subscriptionId"
+        Write-Information "Subscription ID configured."
+      failOnStandardError: false
+
+  - task: PowerShell@2
+    displayName: Inspect APIM artifacts folder
+    inputs:
+      targetType: inline
+      script: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = "Stop"
+        $VerbosePreference = "Continue"
+        $InformationPreference = "Continue"
+
+        $artifactsPath = "$(Build.SourcesDirectory)/${{ parameters.artifactsFolderPath }}"
+        Write-Information "Listing top-level folders beneath '$artifactsPath'..."
+
+        $folders = Get-ChildItem -Path $artifactsPath -Directory -ErrorAction SilentlyContinue
+        if (-not $folders -or $folders.Count -eq 0) {
+          Write-Information "No subfolders found under '$artifactsPath'."
+        }
+        else {
+          $folders | ForEach-Object { Write-Information " - $($_.Name)" }
+        }
+
+        Write-Information "Inspection complete."
+      failOnStderr: true
+      pwsh: true
+
+  - task: PowerShell@2
+    displayName: Print overrides file
+    condition: and(succeeded(), ne('${{ parameters.overridesFilePath }}', ''))
+    inputs:
+      targetType: inline
+      script: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = "Stop"
+        $VerbosePreference = "Continue"
+        $InformationPreference = "Continue"
+
+        $overridesPath = "$(Build.SourcesDirectory)/${{ parameters.artifactsFolderPath }}/${{ parameters.overridesFilePath }}"
+
+        if (-not (Test-Path -LiteralPath $overridesPath)) {
+          Write-Warning "Overrides file '$overridesPath' was not found."
+        }
+        else {
+          Write-Information "Printing overrides file '$overridesPath':"
+          Get-Content -LiteralPath $overridesPath | ForEach-Object { Write-Information " $_" }
+        }
+      failOnStderr: true
+      pwsh: true
+
+  # replacetokens@6 task will need to be installed to use.
+  # Replaces {#[TOKEN_NAME]#} placeholders in the overrides file with secret variable values.
+  # Install via: az devops extension install --publisher-id qetza --extension-id replacetokens
+  # - ${{ if ne(parameters.overridesFilePath, '') }}:
+  #     - task: qetza.replacetokens.replacetokens-task.replacetokens@6
+  #       displayName: "Perform named value secret substitution in ${{ parameters.overridesFilePath }}"
+  #       inputs:
+  #         sources: $(Build.SourcesDirectory)/${{ parameters.artifactsFolderPath }}/${{ parameters.overridesFilePath }}
+  #         encoding: "auto"
+  #         addBOM: true
+  #         verbosity: "off"
+  #         missingVarAction: "none"
+  #         missingVarLog: "warn"
+  #         tokenPattern: "custom"
+  #         tokenPrefix: "{#"
+  #         tokenSuffix: "#}"
+
+  - task: AzureCLI@2
+    displayName: "Deploy: apiops publish for ${{ parameters.environment }} environment"
+    inputs:
+      azureSubscription: ${{ parameters.serviceConnectionName }}
+      scriptType: pscore
+      scriptLocation: inlineScript
+      inlineScript: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = "Stop"
+        $VerbosePreference = "Continue"
+        $InformationPreference = "Continue"
+
+        Write-Host "=========================================="
+        Write-Host "API-Ops CLI Deploy"
+        Write-Host "=========================================="
+        Write-Host "Environment:    ${{ parameters.environment }}"
+        Write-Host "APIM Service:   ${{ parameters.apimServiceName }}"
+        Write-Host "Resource Group: ${{ parameters.resourceGroupName }}"
+        Write-Host "=========================================="
+        Write-Host ""
+
+        # Build argument list — only add optional flags when provided
+        $apiopsArgs = @(
+          "publish",
+          "--resource-group", "${{ parameters.resourceGroupName }}",
+          "--service-name",   "${{ parameters.apimServiceName }}",
+          "--source",         "$(Build.SourcesDirectory)/${{ parameters.artifactsFolderPath }}",
+          "--subscription-id","$(APIOPS_SUBSCRIPTION_ID)"
+        )
+
+        $overridesFilePath = "${{ parameters.overridesFilePath }}"
+        if (-not [string]::IsNullOrWhiteSpace($overridesFilePath)) {
+          $apiopsArgs += "--overrides"
+          $apiopsArgs += "$(Build.SourcesDirectory)/${{ parameters.artifactsFolderPath }}/$overridesFilePath"
+        }
+
+        $commitId = "${{ parameters.commitId }}"
+        if (-not [string]::IsNullOrWhiteSpace($commitId)) {
+          $apiopsArgs += "--commit-id"
+          $apiopsArgs += $commitId
+        }
+
+        $specFormat = "${{ parameters.specFormat }}"
+        if (-not [string]::IsNullOrWhiteSpace($specFormat)) {
+          $apiopsArgs += "--spec-format"
+          $apiopsArgs += $specFormat
+        }
+
+        Write-Information "Running: apiops $($apiopsArgs -join ' ')"
+        & apiops @apiopsArgs
+        $exitCode = $LASTEXITCODE
+
+        if ($exitCode -ne 0) {
+          Write-Host ""
+          Write-Host "=========================================="
+          Write-Host "Deploy FAILED"
+          Write-Host "=========================================="
+          throw "apiops publish failed with exit code: $exitCode"
+        }
+
+        Write-Host ""
+        Write-Host "=========================================="
+        Write-Host "Deploy SUCCEEDED"
+        Write-Host "=========================================="
+        Write-Information "Execution complete."
+      failOnStandardError: false
