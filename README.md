@@ -18,6 +18,9 @@ This repository provides a modular, template-based approach to CI/CD pipelines f
     │   └── publish.yaml      # API publishing steps
     ├── dotnet/               # .NET application helpers
     │   └── dotnet.yaml       # Build and publish .NET projects
+    ├── powershell/           # Azure CLI-authenticated PowerShell helpers
+    │   ├── azure-cli-powershell-check-apply.yaml # Check/apply stage workflow
+    │   └── azure-cli-powershell-script.yaml      # Run a PowerShell script with an Azure service connection
     └── terraform/            # Terraform infrastructure helpers
         ├── terraform.yaml                  # Main Terraform stage (plan + apply)
         ├── terraform-init.yaml             # Backend initialization
@@ -38,8 +41,8 @@ The main deployment orchestrator. Accepts a `projects` array parameter where eac
 | Property | Description |
 |----------|-------------|
 | `name` | Unique project identifier |
-| `projectType` | One of: `terraform`, `api-ops`, `dotnet` |
-| `dependencies` | Array of project names this project depends on |
+| `projectType` | One of: `terraform`, `api-ops`, `api-ops-cli`, `api-center`, `dotnet`, `powershell` |
+| `dependencies` | Array of Azure DevOps stage names this project depends on |
 | `projectSpecs` | Type-specific configuration (see below) |
 
 **Example Usage:**
@@ -55,13 +58,14 @@ extends:
         projectSpecs:
           terraformAction: 'apply'
           terraformWorkspace: 'dev'
+          applyStageName: 'lz_shared'
           serviceConnectionNameTfPlan: 'sc-alz-mgmt-plan'
           serviceConnectionNameTfApply: 'sc-alz-mgmt-apply'
       - name: 'function-dev'
         projectType: 'dotnet'
-        dependencies:
-          - lz-shared
         projectSpecs:
+          dotnetStageDependsOn:
+            - lz_shared
           webAppProjectsPath: '**/*.csproj'
           zipArtifactName: 'function-app-artifact'
 ```
@@ -101,6 +105,84 @@ Validation-focused template for pull requests. Runs:
 | `backendStateVariableGroup` | `alz-mgmt` | Variable group with backend config |
 | `subscriptionVendingRun` | `false` | Enable subscription vending mode |
 
+### PowerShell Helpers
+
+| Template | Purpose |
+|----------|---------|
+| `azure-cli-powershell-check-apply.yaml` | Run a PowerShell script in a check stage, then run it again in an apply stage after check succeeds |
+| `azure-cli-powershell-script.yaml` | Run a PowerShell script through `AzureCLI@2` using an Azure DevOps service connection |
+
+Use this helper for PowerShell scripts that rely on the Azure CLI login established by a service connection, including scripts that call `az` or `az rest`.
+
+**Step-level example: grant Azure Files Microsoft Entra Kerberos admin consent**
+
+```yaml
+steps:
+  - template: .pipelines/helpers/powershell/azure-cli-powershell-script.yaml
+    parameters:
+      displayName: Grant Azure Files Entra Kerberos admin consent
+      serviceConnectionName: sc-alz-mgmt-apply
+      scriptPath: scripts/Grant-AzureFilesEntraKerberosAdminConsent.ps1
+      scriptArguments: >
+        -SubscriptionId "$(subscriptionId)"
+        -ResourceGroupSuffix "$(resourceGroupSuffix)"
+        -Mode Check
+```
+
+**CD project example: run Check after Terraform apply, then Apply after Check succeeds**
+
+```yaml
+extends:
+  template: .pipelines/cd-template.yaml
+  parameters:
+    projects:
+      - name: 'lz-shared'
+        projectType: 'terraform'
+        projectSpecs:
+          applyStageName: lz_shared
+          serviceConnectionNameTfPlan: sc-alz-mgmt-plan
+          serviceConnectionNameTfApply: sc-alz-mgmt-apply
+
+      - name: 'azure_files_admin_consent'
+        projectType: 'powershell'
+        dependencies:
+          - lz_shared
+        projectSpecs:
+          serviceConnectionName: sc-alz-mgmt-apply
+          scriptPath: scripts/Grant-AzureFilesEntraKerberosAdminConsent.ps1
+          scriptArguments: >
+            -SubscriptionId "$(subscriptionId)"
+            -ResourceGroupSuffix "$(resourceGroupSuffix)"
+          modeArgumentName: Mode
+          checkModeValue: Check
+          applyModeValue: Apply
+```
+
+`dependencies` values must be Azure DevOps stage names. In this example, the PowerShell check stage depends on the Terraform apply stage named `lz_shared`, then the PowerShell apply stage depends on its check stage.
+
+For scripts that use a Boolean switch instead of `-Mode Check`/`-Mode Apply`, set explicit mode arguments so PowerShell receives native Boolean values:
+
+```yaml
+projectSpecs:
+  checkModeArguments: '-CheckMode:$true'
+  applyModeArguments: '-CheckMode:$false'
+```
+
+**Key PowerShell Parameters:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `serviceConnectionName` | - | Azure DevOps service connection used by `AzureCLI@2` |
+| `scriptPath` | - | Path to the PowerShell script in the pipeline workspace |
+| `scriptArguments` | `''` | Arguments passed directly to the script before the check/apply mode argument |
+| `modeArgumentName` | `Mode` | Argument name appended by the check/apply workflow |
+| `checkModeValue` | `Check` | Value used in the check stage |
+| `applyModeValue` | `Apply` | Value used in the apply stage |
+| `checkModeArguments` | `-Mode Check` | Full mode argument override for the check stage |
+| `applyModeArguments` | `-Mode Apply` | Full mode argument override for the apply stage |
+| `displayName` | `Run Azure PowerShell script` | Task display name |
+| `workingDirectory` | `''` | Optional working directory for the task |
+
 ### API Ops Helpers
 
 | Template | Purpose |
@@ -134,14 +216,14 @@ Validation-focused template for pull requests. Runs:
 
 ## Dependencies
 
-Projects can declare dependencies on other projects using the `dependencies` array. The CD template respects these dependencies and ensures proper execution order using Azure DevOps stage dependencies.
+Projects that expose `dependencies` should declare Azure DevOps stage names, not project names. For example, if a Terraform project sets `applyStageName: lz_shared`, downstream stages should depend on `lz_shared`.
 
 ```yaml
 - name: 'api-publisher'
   projectType: 'api-ops'
   dependencies:
-    - function-dev      # Waits for function-dev to complete
-    - lz-shared         # Also waits for lz-shared
+    - dotnet
+    - lz_shared
 ```
 
 ## Prerequisites

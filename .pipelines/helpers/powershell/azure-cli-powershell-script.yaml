@@ -1,0 +1,39 @@
+---
+parameters:
+  - name: serviceConnectionName
+    type: string
+  - name: scriptPath
+    type: string
+  - name: scriptArguments
+    type: string
+    default: ''
+  - name: displayName
+    type: string
+    default: 'Run Azure PowerShell script'
+  - name: workingDirectory
+    type: string
+    default: ''
+  - name: addSpnToEnvironment
+    type: boolean
+    default: true
+  - name: useGlobalConfig
+    type: boolean
+    default: true
+  - name: failOnStandardError
+    type: boolean
+    default: false
+
+steps:
+  - task: AzureCLI@2
+    displayName: ${{ parameters.displayName }}
+    inputs:
+      azureSubscription: ${{ parameters.serviceConnectionName }}
+      scriptType: pscore
+      scriptLocation: scriptPath
+      scriptPath: ${{ parameters.scriptPath }}
+      arguments: ${{ parameters.scriptArguments }}
+      addSpnToEnvironment: ${{ parameters.addSpnToEnvironment }}
+      useGlobalConfig: ${{ parameters.useGlobalConfig }}
+      failOnStandardError: ${{ parameters.failOnStandardError }}
+      ${{ if ne(parameters.workingDirectory, '') }}:
+        workingDirectory: ${{ parameters.workingDirectory }}
