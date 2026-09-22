@@ -67,6 +67,27 @@ parameters:
   #       zipArtifactName: 'function-app-artifact'
   #       dotnetVersion: '9.x'
   #
+  #   # PowerShell script with Check/Apply workflow.
+  #   # The check stage depends on dependencies, then the apply stage depends on check succeeding.
+  #   - name: 'azure_files_admin_consent'
+  #     projectType: 'powershell'
+  #     dependencies:
+  #       - lz_shared
+  #     # Optional: Custom stage names (defaults to check_<name> and <name>)
+  #     # checkStageName: 'check_azure_files_admin_consent'
+  #     # checkStageDisplayName: 'Check Azure Files Admin Consent'
+  #     # applyStageName: 'azure_files_admin_consent'
+  #     # applyStageDisplayName: 'Apply Azure Files Admin Consent'
+  #     projectSpecs:
+  #       serviceConnectionName: 'sc-alz-mgmt-apply'
+  #       scriptPath: 'scripts/Grant-AzureFilesEntraKerberosAdminConsent.ps1'
+  #       scriptArguments: >
+  #         -SubscriptionId "$(subscriptionId)"
+  #         -ResourceGroupSuffix "$(resourceGroupSuffix)"
+  #       modeArgumentName: 'Mode'
+  #       checkModeValue: 'Check'
+  #       applyModeValue: 'Apply'
+  #
   #   # API-Ops CLI with Plan/Deploy workflow (uses apiops-cli Node.js tool)
   #   # Replaces 'api-ops' projectType — same Plan/Deploy pattern, different toolchain.
   #   # Migration notes:
@@ -189,6 +210,18 @@ stages:
               # webAppProjectsPath: ${{ coalesce(project.projectSpecs.webAppProjectsPath, '**/*.csproj') }}
               # zipArtifactName: ${{ coalesce(project.projectSpecs.zipArtifactName, 'NOT_SET') }}
               # dotnetVersion: ${{ coalesce(project.projectSpecs.dotnetVersion, '9.x') }}
+      - ${{ if eq(project.projectType, 'powershell') }}:
+          - template: helpers/powershell/azure-cli-powershell-check-apply.yaml
+            parameters:
+              dependencies: ${{ coalesce(project.dependencies, parameters.emptyDependencyList) }}
+              projectSpecs: ${{ project.projectSpecs }}
+              name: ${{ project.name }}
+              checkStageName: ${{ coalesce(project.checkStageName, '') }}
+              checkStageDisplayName: ${{ coalesce(project.checkStageDisplayName, '') }}
+              applyStageName: ${{ coalesce(project.applyStageName, '') }}
+              applyStageDisplayName: ${{ coalesce(project.applyStageDisplayName, '') }}
+              checkEnvironment: ${{ coalesce(project.checkEnvironment, 'powershell-check') }}
+              applyEnvironment: ${{ coalesce(project.applyEnvironment, 'powershell-apply') }}
       - ${{ if eq(project.projectType, 'api-ops-cli') }}:
           - template: helpers/api-ops-cli/api-ops-cli.yaml
             parameters:

@@ -1,0 +1,83 @@
+---
+parameters:
+  - name: name
+    type: string
+  - name: dependencies
+    type: object
+    default: []
+  - name: projectSpecs
+    type: object
+    default: {}
+  - name: checkStageName
+    type: string
+    default: ''
+  - name: checkStageDisplayName
+    type: string
+    default: ''
+  - name: applyStageName
+    type: string
+    default: ''
+  - name: applyStageDisplayName
+    type: string
+    default: ''
+  - name: checkEnvironment
+    type: string
+    default: 'powershell-check'
+  - name: applyEnvironment
+    type: string
+    default: 'powershell-apply'
+  - name: poolName
+    type: string
+    default: 'ado-devops-pool'
+
+stages:
+  - stage: ${{ coalesce(parameters.checkStageName, format('check_{0}', parameters.name)) }}
+    displayName: ${{ coalesce(parameters.checkStageDisplayName, format('Check {0}', parameters.name)) }}
+    ${{ if gt(length(parameters.dependencies), 0) }}:
+      dependsOn: ${{ parameters.dependencies }}
+    jobs:
+      - deployment: check
+        displayName: Check PowerShell Script
+        pool:
+          name: ${{ coalesce(parameters.projectSpecs.poolName, parameters.poolName) }}
+        environment: ${{ coalesce(parameters.projectSpecs.checkEnvironment, parameters.checkEnvironment) }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - template: azure-cli-powershell-script.yaml
+                  parameters:
+                    displayName: ${{ coalesce(parameters.projectSpecs.checkDisplayName, 'Check PowerShell script') }}
+                    serviceConnectionName: ${{ parameters.projectSpecs.serviceConnectionName }}
+                    scriptPath: ${{ parameters.projectSpecs.scriptPath }}
+                    scriptArguments: ${{ format('{0} {1}', coalesce(parameters.projectSpecs.scriptArguments, ''), coalesce(parameters.projectSpecs.checkModeArguments, format('-{0} {1}', coalesce(parameters.projectSpecs.modeArgumentName, 'Mode'), coalesce(parameters.projectSpecs.checkModeValue, 'Check')))) }}
+                    workingDirectory: ${{ coalesce(parameters.projectSpecs.workingDirectory, '') }}
+                    addSpnToEnvironment: ${{ coalesce(parameters.projectSpecs.addSpnToEnvironment, true) }}
+                    useGlobalConfig: ${{ coalesce(parameters.projectSpecs.useGlobalConfig, true) }}
+                    failOnStandardError: ${{ coalesce(parameters.projectSpecs.failOnStandardError, false) }}
+
+  - stage: ${{ coalesce(parameters.applyStageName, parameters.name) }}
+    displayName: ${{ coalesce(parameters.applyStageDisplayName, format('Apply {0}', parameters.name)) }}
+    dependsOn: ${{ coalesce(parameters.checkStageName, format('check_{0}', parameters.name)) }}
+    jobs:
+      - deployment: apply
+        displayName: Apply PowerShell Script
+        pool:
+          name: ${{ coalesce(parameters.projectSpecs.poolName, parameters.poolName) }}
+        environment: ${{ coalesce(parameters.projectSpecs.applyEnvironment, parameters.applyEnvironment) }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - template: azure-cli-powershell-script.yaml
+                  parameters:
+                    displayName: ${{ coalesce(parameters.projectSpecs.applyDisplayName, 'Apply PowerShell script') }}
+                    serviceConnectionName: ${{ parameters.projectSpecs.serviceConnectionName }}
+                    scriptPath: ${{ parameters.projectSpecs.scriptPath }}
+                    scriptArguments: ${{ format('{0} {1}', coalesce(parameters.projectSpecs.scriptArguments, ''), coalesce(parameters.projectSpecs.applyModeArguments, format('-{0} {1}', coalesce(parameters.projectSpecs.modeArgumentName, 'Mode'), coalesce(parameters.projectSpecs.applyModeValue, 'Apply')))) }}
+                    workingDirectory: ${{ coalesce(parameters.projectSpecs.workingDirectory, '') }}
+                    addSpnToEnvironment: ${{ coalesce(parameters.projectSpecs.addSpnToEnvironment, true) }}
+                    useGlobalConfig: ${{ coalesce(parameters.projectSpecs.useGlobalConfig, true) }}
+                    failOnStandardError: ${{ coalesce(parameters.projectSpecs.failOnStandardError, false) }}
