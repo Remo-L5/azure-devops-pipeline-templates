@@ -34,10 +34,10 @@ steps:
         $env:AZAPI_RETRY_GET_AFTER_PUT_MAX_TIME = "60m" # Accounts for eventually consistent management group permissions propagation
 
         $modulePath = Join-Path $env:PIPELINE_WORKSPACE 'src'
-        if ('${{ parameters.root_module_folder_relative_path }}' -and
-          '${{ parameters.root_module_folder_relative_path }}' -ne '.' -and
-          '${{ parameters.root_module_folder_relative_path }}' -ne '') {
-          $modulePath = Join-Path $modulePath "${{ parameters.root_module_folder_relative_path }}"
+        if ('${{ parameters.rootModuleFolderRelativePath }}' -and
+          '${{ parameters.rootModuleFolderRelativePath }}' -ne '.' -and
+          '${{ parameters.rootModuleFolderRelativePath }}' -ne '') {
+          $modulePath = Join-Path $modulePath "${{ parameters.rootModuleFolderRelativePath }}"
         }
 
         # Run Terraform Apply

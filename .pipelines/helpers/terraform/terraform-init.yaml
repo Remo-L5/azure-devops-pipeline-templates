@@ -36,10 +36,10 @@ steps:
         # it is not '.' or empty. this avoids paths like
         # C:\agent\_work\1\s\. which are treated as rooted.
         $modulePath = Join-Path $env:PIPELINE_WORKSPACE 'src'
-        if ('${{ parameters.root_module_folder_relative_path }}' -and
-          '${{ parameters.root_module_folder_relative_path }}' -ne '.' -and
-          '${{ parameters.root_module_folder_relative_path }}' -ne '') {
-          $modulePath = Join-Path $modulePath "${{ parameters.root_module_folder_relative_path }}"
+        if ('${{ parameters.rootModuleFolderRelativePath }}' -and
+          '${{ parameters.rootModuleFolderRelativePath }}' -ne '.' -and
+          '${{ parameters.rootModuleFolderRelativePath }}' -ne '') {
+          $modulePath = Join-Path $modulePath "${{ parameters.rootModuleFolderRelativePath }}"
         }
 
         $arguments = @()
@@ -49,6 +49,7 @@ steps:
         $arguments += "-backend-config=container_name=$($env:BACKEND_AZURE_STORAGE_ACCOUNT_CONTAINER_NAME)"
         $arguments += "-backend-config=key=$($env:BACKEND_AZURE_STORAGE_ACCOUNT_CONTAINER_KEY_NAME)"
         $arguments += "-backend-config=resource_group_name=$($env:BACKEND_AZURE_RESOURCE_GROUP_NAME)"
+        $arguments += "-backend-config=use_azuread_auth=true"
 
         # Run terraform init
         $command = "terraform"
