@@ -2,7 +2,7 @@ parameters:
  - name: terraformWorkspace
    type: string
  - name: serviceConnection
- - name: root_module_folder_relative_path
+ - name: rootModuleFolderRelativePath
    default: '.'
 
 steps:
@@ -16,10 +16,11 @@ steps:
     inlineScript: |
       $workspaceName="${{ parameters.terraformWorkspace }}"
       $modulePath = Join-Path $env:PIPELINE_WORKSPACE 'src'
-      if ('${{ parameters.root_module_folder_relative_path }}' -and
-        '${{ parameters.root_module_folder_relative_path }}' -ne '.' -and
-        '${{ parameters.root_module_folder_relative_path }}' -ne '') {
-        $modulePath = Join-Path $modulePath "${{ parameters.root_module_folder_relative_path }}"
+      $rootModuleFolderRelativePath = "${{ parameters.rootModuleFolderRelativePath }}"
+      if ($rootModuleFolderRelativePath -and
+        $rootModuleFolderRelativePath -ne '.' -and
+        $rootModuleFolderRelativePath -ne '') {
+        $modulePath = Join-Path $modulePath $rootModuleFolderRelativePath
       }
             
       # Change to module path before running workspace commands
