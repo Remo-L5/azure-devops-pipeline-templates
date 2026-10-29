@@ -1,0 +1,72 @@
+---
+parameters:
+  - name: name
+    type: string
+    default: 'react'
+  - name: dependencies
+    type: object
+    default: []
+  - name: projectSpecs
+    type: object
+    default: {}
+  - name: stageName
+    type: string
+    default: ''
+  - name: stageDisplayName
+    type: string
+    default: ''
+  - name: poolName
+    type: string
+    default: ''
+  - name: vmImage
+    type: string
+    default: 'ubuntu-latest'
+
+stages:
+  - stage: ${{ coalesce(parameters.stageName, parameters.name) }}
+    displayName: ${{ coalesce(parameters.stageDisplayName, format('Build {0}', parameters.name)) }}
+    ${{ if gt(length(parameters.dependencies), 0) }}:
+      dependsOn: ${{ parameters.dependencies }}
+    jobs:
+      - job: build
+        displayName: Build and test React
+        pool:
+          ${{ if ne(coalesce(parameters.projectSpecs.poolName, parameters.poolName), '') }}:
+            name: ${{ coalesce(parameters.projectSpecs.poolName, parameters.poolName) }}
+          ${{ if eq(coalesce(parameters.projectSpecs.poolName, parameters.poolName), '') }}:
+            vmImage: ${{ coalesce(parameters.projectSpecs.vmImage, parameters.vmImage) }}
+        steps:
+          - task: UseNode@1
+            displayName: Install Node.js
+            inputs:
+              version: ${{ coalesce(parameters.projectSpecs.nodeVersion, '24.x') }}
+
+          - script: |
+              npm install
+              npm run build
+            displayName: ${{ coalesce(parameters.projectSpecs.buildDisplayName, 'React - install and build') }}
+            workingDirectory: ${{ coalesce(parameters.projectSpecs.workingDirectory, './frontend') }}
+
+          - script: |
+              npm audit --audit-level=${{ coalesce(parameters.projectSpecs.auditLevel, 'high') }}
+            displayName: ${{ coalesce(parameters.projectSpecs.auditDisplayName, 'React - audit check for high or critical package vulnerabilities') }}
+            workingDirectory: ${{ coalesce(parameters.projectSpecs.workingDirectory, './frontend') }}
+
+          - ${{ if ne(coalesce(parameters.projectSpecs.playwrightInstall, true), false) }}:
+            - script: |
+                npx playwright install --with-deps
+              displayName: ${{ coalesce(parameters.projectSpecs.playwrightDisplayName, 'Install Playwright') }}
+              workingDirectory: ${{ coalesce(parameters.projectSpecs.workingDirectory, './frontend') }}
+
+          - script: |
+              npm run ${{ coalesce(parameters.projectSpecs.testScript, 'test:ci') }}
+            displayName: ${{ coalesce(parameters.projectSpecs.testDisplayName, 'React - run unit tests') }}
+            workingDirectory: ${{ coalesce(parameters.projectSpecs.workingDirectory, './frontend') }}
+
+          - ${{ if ne(coalesce(parameters.projectSpecs.publishArtifact, true), false) }}:
+            - task: PublishPipelineArtifact@1
+              displayName: ${{ coalesce(parameters.projectSpecs.publishDisplayName, 'Publish React artifact') }}
+              inputs:
+                targetPath: ${{ coalesce(parameters.projectSpecs.artifactPath, './frontend/dist') }}
+                artifact: ${{ coalesce(parameters.projectSpecs.artifactName, parameters.name) }}
+                publishLocation: pipeline

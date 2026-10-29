@@ -67,6 +67,42 @@ parameters:
   #       zipArtifactName: 'function-app-artifact'
   #       dotnetVersion: '9.x'
   #
+  #   # React frontend build/test helper.
+  #   - name: 'frontend'
+  #     projectType: 'react'
+  #     projectSpecs:
+  #       workingDirectory: './frontend'
+  #       nodeVersion: '24.x'
+  #       testScript: 'test:ci'
+  #       playwrightInstall: true
+  #       artifactPath: './frontend/dist'
+  #       artifactName: 'frontend'
+  #
+  #   # Node.js backend build/test helper.
+  #   - name: 'backend'
+  #     projectType: 'nodejs'
+  #     dependencies:
+  #       - frontend
+  #     projectSpecs:
+  #       workingDirectory: './backend'
+  #       nodeVersion: '24.x'
+  #       testScript: 'test:ci'
+  #       artifactPath: './backend'
+  #       artifactName: 'backend'
+  #
+  #   # Terraform can download one published app artifact and pass its local path
+  #   # to the module as TF_VAR_artifact_local_path.
+  #   - name: 'app-infra'
+  #     projectType: 'terraform'
+  #     dependencies:
+  #       - frontend
+  #       - backend
+  #     projectSpecs:
+  #       planArtifactDownload:
+  #         enabled: true
+  #         artifactName: 'frontend'
+  #         targetPath: '$(Pipeline.Workspace)/frontend'
+  #
   #   # PowerShell script with Check/Apply workflow.
   #   # The check stage depends on dependencies, then the apply stage depends on check succeeding.
   #   - name: 'azure_files_admin_consent'
@@ -206,10 +242,32 @@ stages:
               deployEnvironment: ${{ coalesce(project.deployEnvironment, 'apiops-deploy') }}
       - ${{ if eq(project.projectType, 'dotnet') }}:
           - template: helpers/dotnet/dotnet.yaml
-            parameters: ${{ project.projectSpecs }}
-              # webAppProjectsPath: ${{ coalesce(project.projectSpecs.webAppProjectsPath, '**/*.csproj') }}
-              # zipArtifactName: ${{ coalesce(project.projectSpecs.zipArtifactName, 'NOT_SET') }}
-              # dotnetVersion: ${{ coalesce(project.projectSpecs.dotnetVersion, '9.x') }}
+            parameters:
+              dependencies: ${{ coalesce(project.dependencies, parameters.emptyDependencyList) }}
+              name: ${{ project.name }}
+              stageName: ${{ coalesce(project.stageName, '') }}
+              stageDisplayName: ${{ coalesce(project.stageDisplayName, '') }}
+              webAppProjectsPath: ${{ coalesce(project.projectSpecs.webAppProjectsPath, '**/*.csproj') }}
+              zipArtifactName: ${{ coalesce(project.projectSpecs.zipArtifactName, 'NOT_SET') }}
+              dotnetVersion: ${{ coalesce(project.projectSpecs.dotnetVersion, '9.x') }}
+              dotnetStageDependsOn: ${{ coalesce(project.projectSpecs.dotnetStageDependsOn, parameters.emptyDependencyList) }}
+              poolName: ${{ coalesce(project.projectSpecs.poolName, 'ado-devops-pool') }}
+      - ${{ if eq(project.projectType, 'react') }}:
+          - template: helpers/react/react.yaml
+            parameters:
+              dependencies: ${{ coalesce(project.dependencies, parameters.emptyDependencyList) }}
+              projectSpecs: ${{ project.projectSpecs }}
+              name: ${{ project.name }}
+              stageName: ${{ coalesce(project.stageName, '') }}
+              stageDisplayName: ${{ coalesce(project.stageDisplayName, '') }}
+      - ${{ if eq(project.projectType, 'nodejs') }}:
+          - template: helpers/nodejs/nodejs.yaml
+            parameters:
+              dependencies: ${{ coalesce(project.dependencies, parameters.emptyDependencyList) }}
+              projectSpecs: ${{ project.projectSpecs }}
+              name: ${{ project.name }}
+              stageName: ${{ coalesce(project.stageName, '') }}
+              stageDisplayName: ${{ coalesce(project.stageDisplayName, '') }}
       - ${{ if eq(project.projectType, 'powershell') }}:
           - template: helpers/powershell/azure-cli-powershell-check-apply.yaml
             parameters:

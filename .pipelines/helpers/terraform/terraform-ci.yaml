@@ -1,0 +1,157 @@
+---
+parameters:
+  - name: name
+    type: string
+    default: 'terraform'
+  - name: dependencies
+    type: object
+    default: []
+  - name: projectSpecs
+    type: object
+    default: {}
+  - name: emptyDependencyList
+    type: object
+    default: []
+  - name: emptySpecsObject
+    type: object
+    default: {}
+  - name: stageName
+    type: string
+    default: ''
+  - name: stageDisplayName
+    type: string
+    default: ''
+  - name: poolName
+    type: string
+    default: 'alz-mgmt'
+  - name: environmentName
+    type: string
+    default: 'alz-mgmt-plan'
+
+stages:
+  - stage: ${{ coalesce(parameters.stageName, format('validate_{0}', parameters.name)) }}
+    displayName: ${{ coalesce(parameters.stageDisplayName, format('Validate {0}', parameters.name)) }}
+    ${{ if gt(length(parameters.dependencies), 0) }}:
+      dependsOn: ${{ parameters.dependencies }}
+    variables:
+      - group: ${{ coalesce(parameters.projectSpecs.backendStateVariableGroup, 'alz-mgmt') }}
+      - name: terraformVarFileName
+        ${{ if ne(coalesce(parameters.projectSpecs.subscriptionVendingRun, false), false) }}:
+          value: '${{ parameters.projectSpecs.partitionKey }}-${{ parameters.projectSpecs.rowKey }}.auto.tfvars'
+        ${{ if ne(coalesce(parameters.projectSpecs.subscriptionVendingRun, false), true) }}:
+          value: ''
+    jobs:
+      - job: validate
+        displayName: Validate Terraform
+        pool:
+          name: ${{ coalesce(parameters.projectSpecs.poolName, parameters.poolName) }}
+        steps:
+          - checkout: self
+            displayName: Checkout Terraform Module
+            persistCredentials: true
+            path: src
+
+          - ${{ each mod in coalesce(parameters.projectSpecs.moduleAliases, parameters.emptyDependencyList) }}:
+            - checkout: ${{ mod.alias }}
+              path: src/modules/${{ mod.alias }}
+
+          - template: terraform-installer.yaml
+            parameters:
+              terraformVersion: ${{ coalesce(parameters.projectSpecs.terraformCliVersion, 'latest') }}
+
+          - pwsh: |
+              $modulePath = Join-Path $env:PIPELINE_WORKSPACE 'src'
+              $rootModuleFolderRelativePath = "${{ coalesce(parameters.projectSpecs.rootModuleFolderRelativePath, '.') }}"
+              if ($rootModuleFolderRelativePath -and $rootModuleFolderRelativePath -ne '.' -and $rootModuleFolderRelativePath -ne '') {
+                $modulePath = Join-Path $modulePath $rootModuleFolderRelativePath
+              }
+
+              terraform -chdir="$modulePath" fmt -check
+            displayName: Terraform Format Check
+
+          - pwsh: |
+              $modulePath = Join-Path $env:PIPELINE_WORKSPACE 'src'
+              $rootModuleFolderRelativePath = "${{ coalesce(parameters.projectSpecs.rootModuleFolderRelativePath, '.') }}"
+              if ($rootModuleFolderRelativePath -and $rootModuleFolderRelativePath -ne '.' -and $rootModuleFolderRelativePath -ne '') {
+                $modulePath = Join-Path $modulePath $rootModuleFolderRelativePath
+              }
+
+              terraform -chdir="$modulePath" init -backend=false
+            displayName: Terraform Init
+
+          - pwsh: |
+              $modulePath = Join-Path $env:PIPELINE_WORKSPACE 'src'
+              $rootModuleFolderRelativePath = "${{ coalesce(parameters.projectSpecs.rootModuleFolderRelativePath, '.') }}"
+              if ($rootModuleFolderRelativePath -and $rootModuleFolderRelativePath -ne '.' -and $rootModuleFolderRelativePath -ne '') {
+                $modulePath = Join-Path $modulePath $rootModuleFolderRelativePath
+              }
+
+              terraform -chdir="$modulePath" validate
+            displayName: Terraform Validate
+
+      - deployment: plan
+        dependsOn: validate
+        displayName: Validate Terraform Plan
+        pool:
+          name: ${{ coalesce(parameters.projectSpecs.poolName, parameters.poolName) }}
+        environment: ${{ coalesce(parameters.projectSpecs.environmentName, parameters.environmentName) }}
+        timeoutInMinutes: 0
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                  displayName: Checkout Terraform Module
+                  persistCredentials: true
+                  path: src
+
+                - ${{ each mod in coalesce(parameters.projectSpecs.moduleAliases, parameters.emptyDependencyList) }}:
+                  - checkout: ${{ mod.alias }}
+                    path: src/modules/${{ mod.alias }}
+
+                - template: terraform-installer.yaml
+                  parameters:
+                    terraformVersion: ${{ coalesce(parameters.projectSpecs.terraformCliVersion, 'latest') }}
+
+                - ${{ if ne(coalesce(parameters.projectSpecs.subscriptionVendingRun, false), false) }}:
+                  - template: az-storage-table-get-record.yaml
+                    parameters:
+                      serviceConnection: ${{ coalesce(parameters.projectSpecs.serviceConnectionNameTfPlan, 'sc-alz-mgmt-plan') }}
+                      tableName: ${{ coalesce(parameters.projectSpecs.tableName, 'researchLzVending') }}
+                      partitionKey: ${{ coalesce(parameters.projectSpecs.partitionKey, 'NOT_SET') }}
+                      rowKey: ${{ coalesce(parameters.projectSpecs.rowKey, 'NOT_SET') }}
+                      rootModuleFolderRelativePath: ${{ coalesce(parameters.projectSpecs.rootModuleFolderRelativePath, '.') }}
+
+                - ${{ if and(eq(coalesce(parameters.projectSpecs.planArtifactDownload.enabled, false), true), ne(coalesce(parameters.projectSpecs.planArtifactDownload.artifactName, ''), ''), ne(coalesce(parameters.projectSpecs.planArtifactDownload.targetPath, ''), '')) }}:
+                  - task: DownloadPipelineArtifact@2
+                    displayName: Download Deployable Artifact
+                    inputs:
+                      buildType: 'current'
+                      artifactName: ${{ parameters.projectSpecs.planArtifactDownload.artifactName }}
+                      targetPath: ${{ parameters.projectSpecs.planArtifactDownload.targetPath }}
+
+                - template: terraform-init.yaml
+                  parameters:
+                    serviceConnection: ${{ coalesce(parameters.projectSpecs.serviceConnectionNameTfPlan, 'sc-alz-mgmt-plan') }}
+                    backendAzureResourceGroupName: $(BACKEND_AZURE_RESOURCE_GROUP_NAME)
+                    backendAzureStorageAccountName: $(BACKEND_AZURE_STORAGE_ACCOUNT_NAME)
+                    backendAzureStorageAccountContainerName: $(BACKEND_AZURE_STORAGE_ACCOUNT_CONTAINER_NAME)
+                    backendAzureStorageAccountContainerKeyName: "${{ coalesce(parameters.projectSpecs.terraformWorkspace, 'dev') }}/terraform.tfstate"
+                    rootModuleFolderRelativePath: ${{ coalesce(parameters.projectSpecs.rootModuleFolderRelativePath, '.') }}
+
+                - template: terraform-workspace.yaml
+                  parameters:
+                    serviceConnection: ${{ coalesce(parameters.projectSpecs.serviceConnectionNameTfPlan, 'sc-alz-mgmt-plan') }}
+                    terraformWorkspace: ${{ coalesce(parameters.projectSpecs.terraformWorkspace, 'dev') }}
+                    rootModuleFolderRelativePath: ${{ coalesce(parameters.projectSpecs.rootModuleFolderRelativePath, '.') }}
+
+                - template: terraform-plan.yaml
+                  parameters:
+                    terraformAction: ${{ coalesce(parameters.projectSpecs.terraformAction, 'apply') }}
+                    serviceConnection: ${{ coalesce(parameters.projectSpecs.serviceConnectionNameTfPlan, 'sc-alz-mgmt-plan') }}
+                    rootModuleFolderRelativePath: ${{ coalesce(parameters.projectSpecs.rootModuleFolderRelativePath, '.') }}
+                    terraformOverrideVars: ${{ coalesce(parameters.projectSpecs.terraformOverrideVars, parameters.emptySpecsObject) }}
+                    terraformVarFileName: ${{ variables.terraformVarFileName }}
+                    downloadedArtifactLocalPath: ${{ coalesce(parameters.projectSpecs.planArtifactDownload.targetPath, '') }}
+                    additionalVarFilesDirectory: ${{ coalesce(parameters.projectSpecs.additionalVarFilesDirectory, '') }}
+                    additionalVarFilesPattern: ${{ coalesce(parameters.projectSpecs.additionalVarFilesPattern, '*.tfvars') }}

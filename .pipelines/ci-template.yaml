@@ -1,109 +1,85 @@
 ---
 parameters:
-  - name: rootModuleFolderRelativePath
-    default: '.'
-  - name: terraformCliVersion
-    default: 'latest'
-  - name: serviceConnectionNameTfPlan
-    type: string
-    default: 'sc-alz-mgmt-plan'
-  - name: backendStateVariableGroup
-    type: string
-    default: 'alz-mgmt'
-  - name: terraformOverrideVars
-    type: object
-    default: {}
-  - name: terraformWorkspace
-    type: string
-    default: 'dev'
-  - name: moduleAliases
+  - name: projects
     type: object
     default: []
-  - name: poolName
-    type: string
-    default: 'alz-mgmt'
-  - name: environmentName
-    type: string
-    default: 'alz-mgmt-plan'
-
-variables:
-  - group: ${{ parameters.backendStateVariableGroup }}
-  - name: 'selfHostedAgent'
-    value: 'true'
+  - name: emptyDependencyList
+    type: object
+    default: []
+  - name: emptySpecsObject
+    type: object
+    default: {}
 
 stages:
-  - stage: validate
-    displayName: Validation Terraform
-    jobs:
-      - job: validate
-        displayName: Validate Terraform
-        pool:
-          name: ${{ parameters.poolName }}
-        steps:
-          - template: helpers/terraform-installer.yaml
-            parameters:
-              terraformVersion: ${{ parameters.terraformCliVersion }}
-          - pwsh: |
-              terraform `
-              -chdir="${{ parameters.rootModuleFolderRelativePath }}" `
-              fmt `
-              -check
-            displayName: Terraform Format Check
-          - pwsh: |
-              terraform `
-              -chdir="${{ parameters.rootModuleFolderRelativePath }}" `
-              init `
-              -backend=false
-            displayName: Terraform Init
-          - pwsh: |
-              terraform `
-              -chdir="${{ parameters.rootModuleFolderRelativePath }}" `
-              validate
-            displayName: Terraform Validate
-      - deployment: plan
-        dependsOn: validate
-        displayName: Validate Terraform Plan
-        pool:
-          name: ${{ parameters.poolName }}
-        environment: ${{ parameters.environmentName }}
-        timeoutInMinutes: 0
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - checkout: self
-                  displayName: Checkout Terraform Module
-                  persistCredentials: true
-                  path: src
-                - ${{ each mod in parameters.moduleAliases }}:
-                  - checkout: ${{ mod.alias }}
-                    path: src/modules/${{ mod.alias }}
-                
-                - pwsh: |
-                    Write-Host "Listing $(Pipeline.Workspace)/src"
-                    if (Test-Path "$(Pipeline.Workspace)/src") {
-                      Get-ChildItem -Path "$(Pipeline.Workspace)/src" -Recurse -Force | ForEach-Object { Write-Output $_.FullName }
-                    } else {
-                      Write-Host "Directory not found: $(Pipeline.Workspace)/src"
-                    }
-                  displayName: List src folder contents
-                  
-                - template: helpers/terraform-installer.yaml
-                  parameters:
-                    terraformVersion: ${{ parameters.terraformCliVersion }}
-                - template: helpers/terraform-init.yaml
-                  parameters:
-                    serviceConnection: ${{ parameters.serviceConnectionNameTfPlan }}
-                    backendAzureResourceGroupName: $(BACKEND_AZURE_RESOURCE_GROUP_NAME)
-                    backendAzureStorageAccountName: $(BACKEND_AZURE_STORAGE_ACCOUNT_NAME)
-                    backendAzureStorageAccountContainerName: $(BACKEND_AZURE_STORAGE_ACCOUNT_CONTAINER_NAME)
-                    backendAzureStorageAccountContainerKeyName: "${{ parameters.terraformWorkspace }}/terraform.tfstate"
-                    rootModuleFolderRelativePath: ${{ parameters.rootModuleFolderRelativePath }}
-                - template: helpers/terraform-workspace.yaml
-                  parameters:
-                    serviceConnection: ${{ parameters.serviceConnectionNameTfPlan }}
-                    terraformWorkspace: ${{ parameters.terraformWorkspace }}
-                - template: helpers/terraform-plan.yaml
-                  parameters:
-                    serviceConnection: ${{ parameters.serviceConnectionNameTfPlan }}
-                    rootModuleFolderRelativePath: ${{ parameters.rootModuleFolderRelativePath }}
+  - ${{ each project in parameters.projects }}:
+      - ${{ if eq(project.projectType, 'terraform') }}:
+        - template: helpers/terraform/terraform-ci.yaml
+          parameters:
+            dependencies: ${{ coalesce(project.dependencies, parameters.emptyDependencyList) }}
+            projectSpecs: ${{ project.projectSpecs }}
+            name: ${{ project.name }}
+            stageName: ${{ coalesce(project.stageName, project.planStageName, '') }}
+            stageDisplayName: ${{ coalesce(project.stageDisplayName, project.planStageDisplayName, '') }}
+      - ${{ if eq(project.projectType, 'api-ops') }}:
+        - template: helpers/api-ops/api-ops-ci.yaml
+          parameters:
+            dependencies: ${{ coalesce(project.dependencies, parameters.emptyDependencyList) }}
+            projectSpecs: ${{ project.projectSpecs }}
+            name: ${{ project.name }}
+            planStageName: ${{ coalesce(project.planStageName, '') }}
+            planStageDisplayName: ${{ coalesce(project.planStageDisplayName, '') }}
+            planEnvironment: ${{ coalesce(project.planEnvironment, 'apiops-plan') }}
+      - ${{ if eq(project.projectType, 'dotnet') }}:
+        - template: helpers/dotnet/dotnet.yaml
+          parameters:
+            dependencies: ${{ coalesce(project.dependencies, parameters.emptyDependencyList) }}
+            name: ${{ project.name }}
+            stageName: ${{ coalesce(project.stageName, '') }}
+            stageDisplayName: ${{ coalesce(project.stageDisplayName, '') }}
+            webAppProjectsPath: ${{ coalesce(project.projectSpecs.webAppProjectsPath, '**/*.csproj') }}
+            zipArtifactName: ${{ coalesce(project.projectSpecs.zipArtifactName, 'NOT_SET') }}
+            dotnetVersion: ${{ coalesce(project.projectSpecs.dotnetVersion, '9.x') }}
+            poolName: ${{ coalesce(project.projectSpecs.poolName, 'ado-devops-pool') }}
+      - ${{ if eq(project.projectType, 'react') }}:
+        - template: helpers/react/react.yaml
+          parameters:
+            dependencies: ${{ coalesce(project.dependencies, parameters.emptyDependencyList) }}
+            projectSpecs: ${{ project.projectSpecs }}
+            name: ${{ project.name }}
+            stageName: ${{ coalesce(project.stageName, '') }}
+            stageDisplayName: ${{ coalesce(project.stageDisplayName, '') }}
+      - ${{ if eq(project.projectType, 'nodejs') }}:
+        - template: helpers/nodejs/nodejs.yaml
+          parameters:
+            dependencies: ${{ coalesce(project.dependencies, parameters.emptyDependencyList) }}
+            projectSpecs: ${{ project.projectSpecs }}
+            name: ${{ project.name }}
+            stageName: ${{ coalesce(project.stageName, '') }}
+            stageDisplayName: ${{ coalesce(project.stageDisplayName, '') }}
+      - ${{ if eq(project.projectType, 'powershell') }}:
+        - template: helpers/powershell/azure-cli-powershell-check.yaml
+          parameters:
+            dependencies: ${{ coalesce(project.dependencies, parameters.emptyDependencyList) }}
+            projectSpecs: ${{ project.projectSpecs }}
+            name: ${{ project.name }}
+            checkStageName: ${{ coalesce(project.checkStageName, '') }}
+            checkStageDisplayName: ${{ coalesce(project.checkStageDisplayName, '') }}
+            checkEnvironment: ${{ coalesce(project.checkEnvironment, 'powershell-check') }}
+      - ${{ if eq(project.projectType, 'api-ops-cli') }}:
+        - template: helpers/api-ops-cli/api-ops-cli-ci.yaml
+          parameters:
+            dependencies: ${{ coalesce(project.dependencies, parameters.emptyDependencyList) }}
+            projectSpecs: ${{ project.projectSpecs }}
+            name: ${{ project.name }}
+            planStageName: ${{ coalesce(project.planStageName, '') }}
+            planStageDisplayName: ${{ coalesce(project.planStageDisplayName, '') }}
+            planEnvironment: ${{ coalesce(project.planEnvironment, 'apiops-plan') }}
+      - ${{ if eq(project.projectType, 'api-center') }}:
+        - template: helpers/api-center/api-center-ci.yaml
+          parameters:
+            dependencies: ${{ coalesce(project.dependencies, parameters.emptyDependencyList) }}
+            projectSpecs: ${{ project.projectSpecs }}
+            name: ${{ project.name }}
+            validateStageName: ${{ coalesce(project.validateStageName, '') }}
+            validateStageDisplayName: ${{ coalesce(project.validateStageDisplayName, '') }}
+            validateEnvironment: ${{ coalesce(project.validateEnvironment, 'apicenter-validate') }}
