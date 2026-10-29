@@ -8,6 +8,9 @@ parameters:
   - name: terraformOverrideVars
     type: object
     default: {}
+  - name: terraformSecureFiles
+    type: object
+    default: {}
   - name: terraformVarFileName
     type: string
     default: ''
@@ -25,6 +28,13 @@ parameters:
     displayName: 'File pattern to match additional var files'
 
 steps:
+  - ${{ each secureFile in parameters.terraformSecureFiles }}:
+    - task: DownloadSecureFile@1
+      name: tfSecureFile_${{ secureFile.key }}
+      displayName: Download Terraform Secure File for ${{ secureFile.key }}
+      inputs:
+        secureFile: ${{ secureFile.value }}
+
   - task: AzureCLI@2
     displayName: Terraform Plan for ${{ coalesce(parameters.terraformAction, 'Apply') }}
     inputs:
@@ -33,6 +43,40 @@ steps:
       scriptLocation: inlineScript
       addSpnToEnvironment: true
       inlineScript: |
+        $secureFiles = ConvertFrom-Json -InputObject $env:TERRAFORM_SECURE_FILES -AsHashtable -ErrorAction Stop
+        if ($secureFiles -isnot [System.Collections.IDictionary]) {
+          throw "terraformSecureFiles must be a mapping of Terraform variable names to Secure File names."
+        }
+        $secureFileArguments = @()
+        $secureFileKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        $overrideVars = @{}
+        if ($secureFiles.Count -gt 0) {
+          $overrideVars = ConvertFrom-Json -InputObject $env:TERRAFORM_OVERRIDE_VARS -AsHashtable -ErrorAction Stop
+        }
+        foreach ($key in $secureFiles.Keys) {
+          if ($key -cnotmatch '^[A-Za-z_][A-Za-z0-9_]*$' -or -not $secureFileKeys.Add($key)) {
+            throw "terraformSecureFiles keys must be identifiers using letters, digits and underscores, unique ignoring case."
+          }
+          if ($secureFiles[$key] -isnot [string] -or [string]::IsNullOrWhiteSpace($secureFiles[$key])) {
+            throw "Each terraformSecureFiles value must be a non-empty Secure File name."
+          }
+          if ($overrideVars -is [System.Collections.IDictionary] -and $overrideVars.Contains($key)) {
+            throw "A variable cannot be configured in both terraformSecureFiles and terraformOverrideVars."
+          }
+          $secureFilePath = [Environment]::GetEnvironmentVariable("TF_SECURE_FILE_$key")
+          if ([string]::IsNullOrWhiteSpace($secureFilePath) -or -not (Test-Path -LiteralPath $secureFilePath -PathType Leaf)) {
+            throw "A configured Terraform Secure File was not downloaded."
+          }
+          $resolvedPath = (Resolve-Path -LiteralPath $secureFilePath -ErrorAction Stop).ProviderPath
+          $relativeToTemp = [System.IO.Path]::GetRelativePath($env:AGENT_TEMPDIRECTORY, $resolvedPath)
+          $relativeToWorkspace = [System.IO.Path]::GetRelativePath($env:PIPELINE_WORKSPACE, $resolvedPath)
+          if ([System.IO.Path]::IsPathRooted($relativeToTemp) -or $relativeToTemp -match '^\.\.([\\/]|$)' -or
+              (-not [System.IO.Path]::IsPathRooted($relativeToWorkspace) -and $relativeToWorkspace -notmatch '^\.\.([\\/]|$)')) {
+            throw "Terraform Secure Files must remain in Agent.TempDirectory, outside Pipeline.Workspace and published artifacts."
+          }
+          $secureFileArguments += "-var=$key=$resolvedPath"
+        }
+
         # Get settings from service connection
         az account show 2>$null | ConvertFrom-Json | Set-Variable account
         $clientId = $account.user.name
@@ -169,11 +213,17 @@ steps:
         }
 
         Write-Host "Running: $command $arguments"
+        # Secure File paths must override var files in every planning mode without being logged here.
+        $arguments += $secureFileArguments
         & $command $arguments
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     env:
       TERRAFORM_ACTION: ${{ coalesce(parameters.terraformAction, 'apply') }}
       TERRAFORM_OVERRIDE_VARS: ${{ convertToJson(parameters.terraformOverrideVars) }}
+      TERRAFORM_SECURE_FILES: ${{ convertToJson(parameters.terraformSecureFiles) }}
+      ${{ each secureFile in parameters.terraformSecureFiles }}:
+        TF_SECURE_FILE_${{ secureFile.key }}: $(tfSecureFile_${{ secureFile.key }}.secureFilePath)
       TERRAFORM_VAR_FILE_NAME: ${{ parameters.terraformVarFileName }}
       ADDITIONAL_VAR_FILES_DIRECTORY: ${{ parameters.additionalVarFilesDirectory }}
       ADDITIONAL_VAR_FILES_PATTERN: ${{ parameters.additionalVarFilesPattern }}

@@ -110,6 +110,59 @@ Validation-focused template for pull requests. Uses the same `projects` array st
 | `serviceConnectionNameTfApply` | `sc-alz-mgmt-apply` | Apply service connection |
 | `backendStateVariableGroup` | `alz-mgmt` | Variable group with backend config |
 | `subscriptionVendingRun` | `false` | Enable subscription vending mode |
+| `terraformSecureFiles` | `{}` | Mapping of Terraform string variable names to Azure DevOps Library Secure File names (plan only) |
+
+#### Terraform Secure Files
+
+Configure the same optional mapping in CD or CI `projectSpecs` (or directly on
+`terraform.yaml` / `terraform-plan.yaml`):
+
+```yaml
+projectSpecs:
+  terraformSecureFiles:
+    backend_root_certificate_path: backend-root.cer
+    secondary_root_certificate_path: secondary-root.cer
+```
+
+Upload the files to **Pipelines > Library > Secure files** and authorize the
+consuming pipeline, including any required approvals/checks. Keys must match
+`[A-Za-z_][A-Za-z0-9_]*` and be unique ignoring case; values must be non-empty
+Secure File names. Do not configure the same variable in `terraformOverrideVars`.
+An empty mapping preserves existing behavior and adds no download tasks.
+
+Declare each mapped Terraform input as a required string variable (without a
+default file path), then use `filebase64(var.backend_root_certificate_path)` in
+the module's certificate configuration. `DownloadSecureFile@1` downloads each
+file in the plan deployment job and the helper passes its absolute path as a
+`-var` argument, after all variable-file arguments. This works with CLI overrides,
+subscription-vending variable files, and additional variable files; mapped paths
+take precedence over values in those files. Existing behavior that ignores
+`terraformOverrideVars` when `terraformVarFileName` is set is unchanged.
+
+The CI format/init/validate job needs no download: `terraform validate` checks the
+configuration with required input values unknown. The CI plan job downloads the
+files just like CD. This does not support hard-coded file paths or file reads that
+require a known default during validation.
+
+Raw downloads stay in `Agent.TempDirectory`, outside `Pipeline.Workspace`, and
+are removed by the Azure DevOps task at job completion. The helper fails if a
+download is missing or located inside the artifact source workspace. It does not
+print file contents or add the mapped paths to its command log. **This is not a
+secret-redaction mechanism:** Terraform diagnostics, plan output, saved plans,
+and state can contain file data. Use this feature for public CA certificates,
+protect plan artifacts and state, and do not use it to deliver private keys.
+
+For `filebase64()` evaluated during planning, the certificate data is captured in
+the saved plan, so apply uses `tfplan` without downloading the file again. This
+feature does not provide files for apply-time provisioners or deferred file reads.
+Existing consumers must use a release containing this change. An Azure
+DevOps-hosted mirror pinned to an older tag (such as `v1.1.0`) must first be
+updated/mirrored and its pipeline configuration adapted to the current
+`projects` / camelCase interface; this change does not update that mirror or pin.
+
+Local regression checks: `python -m unittest discover -s tests -v`
+(requires Python with PyYAML, PowerShell 7, and Terraform). These checks are not a
+substitute for Azure DevOps template preview and an authorized pipeline run.
 
 ### PowerShell Helpers
 

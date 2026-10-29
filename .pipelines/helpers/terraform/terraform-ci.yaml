@@ -151,6 +151,7 @@ stages:
                     serviceConnection: ${{ coalesce(parameters.projectSpecs.serviceConnectionNameTfPlan, 'sc-alz-mgmt-plan') }}
                     rootModuleFolderRelativePath: ${{ coalesce(parameters.projectSpecs.rootModuleFolderRelativePath, '.') }}
                     terraformOverrideVars: ${{ coalesce(parameters.projectSpecs.terraformOverrideVars, parameters.emptySpecsObject) }}
+                    terraformSecureFiles: ${{ coalesce(parameters.projectSpecs.terraformSecureFiles, parameters.emptySpecsObject) }}
                     terraformVarFileName: ${{ variables.terraformVarFileName }}
                     downloadedArtifactLocalPath: ${{ coalesce(parameters.projectSpecs.planArtifactDownload.targetPath, '') }}
                     additionalVarFilesDirectory: ${{ coalesce(parameters.projectSpecs.additionalVarFilesDirectory, '') }}
