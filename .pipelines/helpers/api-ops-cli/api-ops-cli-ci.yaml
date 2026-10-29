@@ -1,0 +1,50 @@
+---
+parameters:
+  - name: name
+    type: string
+  - name: dependencies
+    type: object
+    default: []
+  - name: projectSpecs
+    type: object
+    default: {}
+  - name: planStageName
+    type: string
+    default: ''
+  - name: planStageDisplayName
+    type: string
+    default: ''
+  - name: planEnvironment
+    type: string
+    default: 'apiops-plan'
+  - name: poolName
+    type: string
+    default: 'ado-devops-pool'
+
+stages:
+  - stage: ${{ coalesce(parameters.planStageName, format('plan_{0}', parameters.name)) }}
+    displayName: ${{ coalesce(parameters.planStageDisplayName, format('Plan {0}', parameters.name)) }}
+    ${{ if gt(length(parameters.dependencies), 0) }}:
+      dependsOn: ${{ parameters.dependencies }}
+    jobs:
+      - deployment: plan
+        displayName: Plan API-Ops CLI Changes (Dry-Run)
+        pool:
+          name: ${{ coalesce(parameters.projectSpecs.poolName, parameters.poolName) }}
+        environment: ${{ coalesce(parameters.projectSpecs.planEnvironment, parameters.planEnvironment) }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - template: plan.yaml
+                  parameters:
+                    serviceConnectionName: ${{ parameters.projectSpecs.serviceConnectionName }}
+                    artifactsFolderPath: ${{ coalesce(parameters.projectSpecs.artifactsFolderPath, 'apim-artifacts') }}
+                    environment: ${{ coalesce(parameters.projectSpecs.environment, 'dev') }}
+                    resourceGroupName: ${{ parameters.projectSpecs.resourceGroupName }}
+                    apimServiceName: ${{ parameters.projectSpecs.apimServiceName }}
+                    subscriptionId: ${{ coalesce(parameters.projectSpecs.subscriptionId, '') }}
+                    overridesFilePath: ${{ coalesce(parameters.projectSpecs.overridesFilePath, '') }}
+                    commitId: ${{ coalesce(parameters.projectSpecs.commitId, '') }}
+                    apiopsCliVersion: ${{ coalesce(parameters.projectSpecs.apiopsCliVersion, 'latest') }}
+                    specFormat: ${{ coalesce(parameters.projectSpecs.specFormat, '') }}

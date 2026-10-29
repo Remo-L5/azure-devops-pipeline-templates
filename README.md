@@ -4,7 +4,7 @@ Reusable Azure DevOps pipeline templates for deploying Azure Landing Zone (ALZ) 
 
 ## Overview
 
-This repository provides a modular, template-based approach to CI/CD pipelines for Azure deployments. It supports multiple project types including **Terraform**, **API Operations (APIOps)**, and **.NET** applications—all orchestrated through a unified pipeline interface.
+This repository provides a modular, template-based approach to CI/CD pipelines for Azure deployments. It supports multiple project types including **Terraform**, **API Operations (APIOps)**, **.NET**, **Node.js**, and **React** applications—all orchestrated through a unified pipeline interface.
 
 ## Repository Structure
 
@@ -18,6 +18,10 @@ This repository provides a modular, template-based approach to CI/CD pipelines f
     │   └── publish.yaml      # API publishing steps
     ├── dotnet/               # .NET application helpers
     │   └── dotnet.yaml       # Build and publish .NET projects
+    ├── nodejs/               # Node.js application helpers
+    │   └── nodejs.yaml       # Install, audit, build, and test Node.js projects
+    ├── react/                # React application helpers
+    │   └── react.yaml        # Install, audit, build, Playwright setup, and test React projects
     ├── powershell/           # Azure CLI-authenticated PowerShell helpers
     │   ├── azure-cli-powershell-check-apply.yaml # Check/apply stage workflow
     │   └── azure-cli-powershell-script.yaml      # Run a PowerShell script with an Azure service connection
@@ -41,7 +45,7 @@ The main deployment orchestrator. Accepts a `projects` array parameter where eac
 | Property | Description |
 |----------|-------------|
 | `name` | Unique project identifier |
-| `projectType` | One of: `terraform`, `api-ops`, `api-ops-cli`, `api-center`, `dotnet`, `powershell` |
+| `projectType` | One of: `terraform`, `api-ops`, `api-ops-cli`, `api-center`, `dotnet`, `nodejs`, `react`, `powershell` |
 | `dependencies` | Array of Azure DevOps stage names this project depends on |
 | `projectSpecs` | Type-specific configuration (see below) |
 
@@ -72,11 +76,13 @@ extends:
 
 ### CI Template (`ci-template.yaml`)
 
-Validation-focused template for pull requests. Runs:
-- Terraform format check
-- Terraform init (backend=false)
-- Terraform validate
-- Terraform plan (for review)
+Validation-focused template for pull requests. Uses the same `projects` array structure as `cd-template.yaml`, but runs non-deploying validation stages:
+- Terraform format/init/validate and plan
+- API Ops dry-run plan
+- API Ops CLI dry-run plan
+- API Center validation
+- PowerShell check mode
+- .NET, Node.js, and React build/test stages
 
 ## Helpers
 
@@ -213,6 +219,80 @@ projectSpecs:
 | `webAppProjectsPath` | `**/*.csproj` | Path pattern to .NET projects |
 | `dotnetVersion` | `8.x` | .NET SDK version |
 | `zipArtifactName` | - | Name for published artifact |
+
+### Node.js Helpers
+
+| Template | Purpose |
+|----------|---------|
+| `nodejs.yaml` | Install Node.js, run npm install/build, audit dependencies, and run tests |
+
+**Key Node.js Parameters:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `workingDirectory` | `./backend` | Node.js project folder |
+| `nodeVersion` | `24.x` | Node.js version installed by `UseNode@1` |
+| `auditLevel` | `high` | Minimum vulnerability level that fails `npm audit` |
+| `testScript` | `test:ci` | npm script name run by the test step |
+| `publishArtifact` | `true` | Whether to publish a pipeline artifact after tests pass |
+| `artifactPath` | `./backend` | Path to publish for later deployment stages |
+| `artifactName` | Project `name` | Pipeline artifact name |
+
+### React Helpers
+
+| Template | Purpose |
+|----------|---------|
+| `react.yaml` | Install Node.js, run npm install/build, audit dependencies, install Playwright, and run tests |
+
+**Key React Parameters:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `workingDirectory` | `./frontend` | React project folder |
+| `nodeVersion` | `24.x` | Node.js version installed by `UseNode@1` |
+| `auditLevel` | `high` | Minimum vulnerability level that fails `npm audit` |
+| `playwrightInstall` | `true` | Whether to run `npx playwright install --with-deps` before tests |
+| `testScript` | `test:ci` | npm script name run by the test step |
+| `publishArtifact` | `true` | Whether to publish a pipeline artifact after tests pass |
+| `artifactPath` | `./frontend/dist` | Path to publish for later deployment stages |
+| `artifactName` | Project `name` | Pipeline artifact name |
+
+**Node.js with React example:**
+
+```yaml
+extends:
+  template: .pipelines/cd-template.yaml
+  parameters:
+    projects:
+      - name: frontend
+        projectType: react
+        projectSpecs:
+          workingDirectory: './frontend'
+          nodeVersion: '24.x'
+          artifactPath: './frontend/dist'
+          artifactName: 'frontend'
+
+      - name: backend
+        projectType: nodejs
+        dependencies:
+          - frontend
+        projectSpecs:
+          workingDirectory: './backend'
+          nodeVersion: '24.x'
+          artifactPath: './backend'
+          artifactName: 'backend'
+
+      - name: app-infra
+        projectType: terraform
+        dependencies:
+          - frontend
+          - backend
+        projectSpecs:
+          planArtifactDownload:
+            enabled: true
+            artifactName: 'frontend'
+            targetPath: '$(Pipeline.Workspace)/frontend'
+```
 
 ## Dependencies
 

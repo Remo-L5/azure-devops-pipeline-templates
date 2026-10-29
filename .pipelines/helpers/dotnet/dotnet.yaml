@@ -1,5 +1,17 @@
 ---
 parameters:
+  - name: name
+    type: string
+    default: 'dotnet'
+  - name: dependencies
+    type: object
+    default: []
+  - name: stageName
+    type: string
+    default: ''
+  - name: stageDisplayName
+    type: string
+    default: ''
   - name: webAppProjectsPath
     type: string
     default: '**/*.csproj'
@@ -18,9 +30,11 @@ parameters:
     default: 'ado-devops-pool'
 
 stages:
-  - stage: dotnet
-    displayName: DotNet
-    ${{ if gt(length(parameters.dotnetStageDependsOn), 0) }}:
+  - stage: ${{ coalesce(parameters.stageName, parameters.name) }}
+    displayName: ${{ coalesce(parameters.stageDisplayName, 'DotNet') }}
+    ${{ if gt(length(parameters.dependencies), 0) }}:
+      dependsOn: ${{ parameters.dependencies }}
+    ${{ if and(eq(length(parameters.dependencies), 0), gt(length(parameters.dotnetStageDependsOn), 0)) }}:
       dependsOn: ${{ parameters.dotnetStageDependsOn }}
     jobs:
       - job: build_project
