@@ -51,6 +51,7 @@ stages:
   - ${{ if eq(parameters.skipPlanStage, false) }}:
     - stage: ${{ coalesce(parameters.planStageName, format('plan_{0}', parameters.name)) }}
       displayName: ${{ coalesce(parameters.planStageDisplayName, format('Plan {0}', parameters.name)) }}
+      condition: ${{ coalesce(parameters.projectSpecs.condition, 'succeeded()') }}
       ${{ if gt(length(parameters.dependencies), 0) }}:
         dependsOn: ${{ parameters.dependencies }}
       jobs:
@@ -82,6 +83,7 @@ stages:
   # ============================================================================
   - stage: ${{ coalesce(parameters.deployStageName, parameters.name) }}
     displayName: ${{ coalesce(parameters.deployStageDisplayName, format('Deploy {0}', parameters.name)) }}
+    condition: and(succeeded(), ${{ coalesce(parameters.projectSpecs.condition, 'true') }})
     ${{ if eq(parameters.skipPlanStage, false) }}:
       dependsOn: ${{ coalesce(parameters.planStageName, format('plan_{0}', parameters.name)) }}
     ${{ if eq(parameters.skipPlanStage, true) }}:

@@ -258,14 +258,17 @@ projectSpecs:
 | `environment` | Target environment |
 | `resourceGroupName` | APIM resource group |
 | `apiManagementServiceBaseName` | APIM instance name |
+| `condition` | Optional `projectSpecs` stage condition for API Ops CI/CD; defaults to `succeeded()`. Publish also requires a successful dependency (the plan stage unless skipped). |
 
 #### Consuming-repository CI and CD examples
 
 Copy [azure-pipelines-ci.yaml](.pipelines/examples/api-ops/azure-pipelines-ci.yaml)
 and [azure-pipelines-cd.yaml](.pipelines/examples/api-ops/azure-pipelines-cd.yaml)
 into the consuming repository and register them as separate Azure Pipelines.
-They call the API Ops step helpers directly so the consuming pipeline owns
-the branch/reason conditions and deployment approvals.
+They extend the common `.pipelines/ci-template.yaml` and
+`.pipelines/cd-template.yaml`. All environment-selection and routing expressions
+live in the consuming pipeline's `variables` block; the common templates own
+the plan/publish stages.
 
 | Pipeline event | `environment` variable | Action |
 |----------------|------------------------|--------|
@@ -274,24 +277,36 @@ the branch/reason conditions and deployment approvals.
 | Merge into `dev` (`IndividualCI` or `BatchedCI`) | `dev` | CD dry-run, then publish to dev |
 | Merge into `stage` (`IndividualCI` or `BatchedCI`) | `stage` | CD dry-run, then publish to stage |
 | Manual CD run (`Manual`) | `prod` | CD dry-run, then publish to production |
-| Any other reason or branch | Not selected | No matching stage runs |
+| Any other reason or branch | `none` | All API Ops stages are skipped |
 
 CI checks `System.PullRequest.TargetBranch`, accepting both `refs/heads/dev`
 and `dev` (and the corresponding stage forms) for Azure Repos/GitHub compatibility.
 After a merge, CD checks `Build.SourceBranch`, not PR variables: a completed PR
-produces a branch CI run, not a `PullRequest` run. Each selected stage defines
-the `environment` variable and passes it to the helper. The service connection,
-APIM resource names, and Azure Pipelines environment are selected explicitly;
-the helper's `environment` parameter alone does not select an APIM instance.
-Stages have no implicit dependencies, so a skipped dev stage cannot block stage
-or production. Publishing depends on a successful dry-run.
+produces a branch CI run, not a `PullRequest` run.
+
+The root `environment` variable uses a runtime expression (`$[...]`) because
+the PR target branch is not available during template expansion. Each project's
+`projectSpecs.environment` passes it through as `$(environment)`, not
+`${{ variables.environment }}`. Separate project entries keep service connections
+and Azure Pipelines environments literal so Azure DevOps can resolve and
+authorize them before execution. Do not construct service-connection names from
+the runtime-selected environment.
+
+The `devCondition`, `stageCondition`, and `prodCondition` variables contain
+condition expressions, passed unchanged through `projectSpecs.condition` to
+the API Ops stage helpers. They allow skipped sibling stages without continuing
+after a failure or cancellation. Publish additionally requires its plan stage to
+succeed. When no condition is supplied, existing helpers retain their normal
+`succeeded()` behavior, including when `skipPlanStage` is enabled.
 
 Before using the examples:
 
 - Replace the GitHub repository service connection `github-template-connection`,
   agent pool, Azure service connections, resource groups, and APIM names with
   your own. The template repository uses `main` for illustration; pin a reviewed
-  release tag for controlled adoption.
+  release tag for controlled adoption. The referenced revision must include
+  the API Ops `projectSpecs.condition` support shown here; an older revision
+  would ignore these gates.
 - Commit the APIOps artifacts under `artifacts` with the applicable publisher
   configuration files: `configuration.dev.yaml`, `configuration.stage.yaml`,
   and `configuration.prod.yaml`. Adjust the paths if your layout differs.

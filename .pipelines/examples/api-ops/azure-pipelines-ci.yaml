@@ -16,42 +16,46 @@ resources:
       name: Remo-L5/azure-devops-pipeline-templates
       ref: refs/heads/main
 
-parameters:
-  - name: environments
-    type: object
-    default:
-      - dev
-      - stage
+variables:
+  - name: environment
+    value: >-
+      $[iif(
+      and(eq(variables['Build.Reason'], 'PullRequest'), in(variables['System.PullRequest.TargetBranch'], 'refs/heads/dev', 'dev')),
+      'dev',
+      iif(
+      and(eq(variables['Build.Reason'], 'PullRequest'), in(variables['System.PullRequest.TargetBranch'], 'refs/heads/stage', 'stage')),
+      'stage', 'none'))]
+  # Ignore skipped sibling stages, but never continue after failure/cancellation.
+  - name: devCondition
+    value: and(not(failed()), not(canceled()), eq(variables['environment'], 'dev'))
+  - name: stageCondition
+    value: and(not(failed()), not(canceled()), eq(variables['environment'], 'stage'))
 
-stages:
-  - ${{ each target in parameters.environments }}:
-      - stage: validate_${{ target }}
-        displayName: Validate API Ops (${{ target }})
-        dependsOn: []
-        condition: |
-          and(
-            succeeded(),
-            eq(variables['Build.Reason'], 'PullRequest'),
-            in(variables['System.PullRequest.TargetBranch'], 'refs/heads/${{ target }}', '${{ target }}')
-          )
-        variables:
-          - name: environment
-            value: ${{ target }}
-        jobs:
-          - deployment: plan
-            displayName: Dry-run API Ops
-            pool:
-              name: ado-devops-pool
-            environment: apiops-plan-${{ target }}
-            strategy:
-              runOnce:
-                deploy:
-                  steps:
-                    - template: /.pipelines/helpers/api-ops/plan.yaml@templates
-                      parameters:
-                        environment: ${{ variables.environment }}
-                        serviceConnectionName: sc-apiops-${{ target }}
-                        resourceGroupName: rg-apiops-${{ target }}
-                        apimServiceName: apim-apiops-${{ target }}
-                        apimServiceOutputFolderPath: artifacts
-                        configurationFilePath: configuration.${{ target }}.yaml
+extends:
+  template: /.pipelines/ci-template.yaml@templates
+  parameters:
+    projects:
+      - name: apiops_dev
+        projectType: api-ops
+        projectSpecs:
+          condition: ${{ variables.devCondition }}
+          environment: $(environment)
+          serviceConnectionName: sc-apiops-dev
+          resourceGroupName: rg-apiops-dev
+          apimServiceName: apim-apiops-dev
+          apimServiceOutputFolderPath: artifacts
+          configurationFilePath: configuration.dev.yaml
+          planEnvironment: apiops-plan-dev
+          poolName: ado-devops-pool
+      - name: apiops_stage
+        projectType: api-ops
+        projectSpecs:
+          condition: ${{ variables.stageCondition }}
+          environment: $(environment)
+          serviceConnectionName: sc-apiops-stage
+          resourceGroupName: rg-apiops-stage
+          apimServiceName: apim-apiops-stage
+          apimServiceOutputFolderPath: artifacts
+          configurationFilePath: configuration.stage.yaml
+          planEnvironment: apiops-plan-stage
+          poolName: ado-devops-pool
