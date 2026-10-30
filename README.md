@@ -259,6 +259,7 @@ projectSpecs:
 | `resourceGroupName` | APIM resource group |
 | `apiManagementServiceBaseName` | APIM instance name |
 | `condition` | Optional `projectSpecs` stage condition for API Ops CI; defaults to `succeeded()`. |
+| `validationTargets` | Optional CI-only array of `environment`, `serviceConnectionName`, and optional `planEnvironment` entries. The helper validates only the entry matching the root `environment` variable. |
 
 #### Consuming-repository CI and CD examples
 
@@ -266,9 +267,9 @@ Copy [azure-pipelines-ci.yaml](.pipelines/examples/api-ops/azure-pipelines-ci.ya
 and [azure-pipelines-cd.yaml](.pipelines/examples/api-ops/azure-pipelines-cd.yaml)
 into the consuming repository and register them as separate Azure Pipelines.
 They extend the common `.pipelines/ci-template.yaml` and
-`.pipelines/cd-template.yaml`. All environment-selection and routing expressions
-live in the consuming pipeline's `variables` block; the common templates own
-the plan/publish stages.
+`.pipelines/cd-template.yaml`. Both declare one `apiops` project and select the
+environment in the consuming pipeline's `variables` block; the common templates
+own the plan/publish stages and CI connection selection.
 
 | Pipeline event | `environment` variable | Action |
 |----------------|------------------------|--------|
@@ -286,19 +287,23 @@ After a merge, CD checks `Build.SourceBranch`, not PR variables: a completed PR
 produces a branch CI run, not a `PullRequest` run.
 
 In CI, the root `environment` variable uses a runtime expression (`$[...]`)
-because the PR target branch is not available during template expansion. Each project's
+because the PR target branch is not available during template expansion. The project's
 `projectSpecs.environment` passes it through as `$(environment)`, not
-`${{ variables.environment }}`. Separate project entries keep service connections
-and Azure Pipelines environments literal so Azure DevOps can resolve and
-authorize them before execution. Do not construct service-connection names from
-the runtime-selected environment.
+`${{ variables.environment }}`. Its `validationTargets` list declares the dev
+and stage service connections and pipeline environments literally so Azure DevOps
+can resolve and authorize them before execution. Do not construct
+service-connection names from the runtime-selected environment.
 
-CI's `devCondition` and `stageCondition` variables contain condition expressions,
-passed unchanged through `projectSpecs.condition` to the CI stage helper.
-They allow skipped sibling stages without continuing after a failure or
-cancellation. Only the matching environment runs. APIM names, resource-group
-names, and configuration paths use `$(environment)` at runtime; stage names
-remain static, and service connections and pipeline environments stay literal.
+The consuming CI file has no routing conditions or duplicate projects.
+The shared CI helper generates the internal stages and selects only the
+validation target matching `variables['environment']`. This allows skipped
+sibling stages without continuing after a failure or cancellation. APIM names,
+resource-group names, and configuration paths use `$(environment)` at runtime;
+stage identifiers and authorized resources remain compile-time values.
+Without `validationTargets`, existing single-connection CI callers retain
+their original behavior. Direct callers of `api-ops-ci.yaml` pass its
+`validationTargets` parameter; the common CI template forwards the
+`projectSpecs.validationTargets` list automatically.
 
 CD uses compile-time variable expressions (`${{ if ... }}`) instead:
 `Build.Reason` and `Build.SourceBranch` are available during template expansion.
@@ -316,8 +321,8 @@ Before using the examples:
   agent pool, Azure service connections, resource groups, and APIM names with
   your own. The template repository uses `main` for illustration; pin a reviewed
   release tag for controlled adoption. The referenced revision must include
-  the API Ops `projectSpecs.condition` support shown here; an older revision
-  would ignore these gates.
+  the API Ops `validationTargets` support shown here; older revisions do not
+  support this single-project runtime-selection example.
 - Commit the APIOps artifacts under `artifacts` with the applicable publisher
   configuration files: `configuration.dev.yaml`, `configuration.stage.yaml`,
   and `configuration.prod.yaml`. Adjust the paths if your layout differs.

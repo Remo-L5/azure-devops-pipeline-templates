@@ -50,6 +50,8 @@ def evaluate(expression, variables, dependency="succeeded"):
             return variables.get(token[11:-2], "")
         if token.startswith("'"):
             return token[1:-1]
+        if token in ("true", "false"):
+            return token == "true"
         if tokens[position] != "(":
             raise ValueError("Expected opening parenthesis")
         position += 1
@@ -82,6 +84,12 @@ def select_environment(data, variables):
     raise ValueError("No matching environment definition")
 
 
+def target_stage_call():
+    wrapper = load(HELPERS / "api-ops-ci.yaml")
+    branch = wrapper["stages"][0]["${{ if gt(length(parameters.validationTargets), 0) }}"]
+    return branch[0]["${{ each target in parameters.validationTargets }}"][0]
+
+
 class ApiOpsExamplesTests(unittest.TestCase):
     def test_examples_extend_common_templates_with_resolvable_connections(self):
         for kind in ("ci", "cd"):
@@ -98,22 +106,29 @@ class ApiOpsExamplesTests(unittest.TestCase):
             self.assertEqual(api_ops[0]["parameters"]["projectSpecs"],
                              "${{ project.projectSpecs }}")
             projects = data["extends"]["parameters"]["projects"]
-            self.assertEqual(len(projects), 2 if kind == "ci" else 1)
+            self.assertEqual(len(projects), 1)
+            self.assertEqual(projects[0]["name"], "apiops")
+            self.assertEqual([v["name"] for v in data["variables"]], ["environment"])
+            self.assertNotIn("condition", projects[0]["projectSpecs"])
             for project in projects:
                 self.assertEqual(project["projectType"], "api-ops")
                 self.assertNotIn("$", project["name"])
             if kind == "ci":
-                for project, target in zip(projects, ("dev", "stage")):
-                    specs = project["projectSpecs"]
-                    self.assertEqual(specs["environment"], "$(environment)")
-                    self.assertEqual(specs["serviceConnectionName"], f"sc-apiops-{target}")
-                    self.assertEqual(specs["condition"],
-                                     "${{ variables." + target + "Condition }}")
-                    self.assertEqual(specs["planEnvironment"], f"apiops-plan-{target}")
-                    self.assertEqual(specs["resourceGroupName"], "rg-apiops-$(environment)")
-                    self.assertEqual(specs["apimServiceName"], "apim-apiops-$(environment)")
-                    self.assertEqual(specs["configurationFilePath"],
-                                     "configuration.$(environment).yaml")
+                self.assertEqual(
+                    api_ops[0]["parameters"]["validationTargets"],
+                    "${{ coalesce(project.projectSpecs.validationTargets, parameters.emptyDependencyList) }}",
+                )
+                specs = projects[0]["projectSpecs"]
+                self.assertEqual(specs["environment"], "$(environment)")
+                self.assertEqual(specs["resourceGroupName"], "rg-apiops-$(environment)")
+                self.assertEqual(specs["apimServiceName"], "apim-apiops-$(environment)")
+                self.assertEqual(specs["configurationFilePath"],
+                                 "configuration.$(environment).yaml")
+                self.assertEqual(specs["validationTargets"], [
+                    {"environment": target, "serviceConnectionName": f"sc-apiops-{target}",
+                     "planEnvironment": f"apiops-plan-{target}"}
+                    for target in ("dev", "stage")
+                ])
             else:
                 self.assertEqual(projects[0]["name"], "apiops")
                 specs = projects[0]["projectSpecs"]
@@ -140,12 +155,13 @@ class ApiOpsExamplesTests(unittest.TestCase):
         reasons = ("PullRequest", "Manual", "IndividualCI", "BatchedCI",
                    "Schedule", "ResourceTrigger", "BuildCompletion")
         sources = ("refs/heads/dev", "refs/heads/stage", "refs/heads/main",
-                   "refs/pull/42/merge")
+                   "refs/heads/feature/example", "refs/pull/42/merge")
         destinations = ("", "dev", "stage", "refs/heads/dev",
                         "refs/heads/stage", "refs/heads/main")
+        condition = target_stage_call()["parameters"]["target"]["condition"].replace(
+            "${{ coalesce(parameters.projectSpecs.condition, 'true') }}", "true")
         for kind in ("ci", "cd"):
             data = load(EXAMPLES / f"azure-pipelines-{kind}.yaml")
-            definitions = {v["name"]: v.get("value") for v in data["variables"]}
             targets = ("dev", "stage") if kind == "ci" else ("dev", "stage", "prod")
             for reason, source, destination in itertools.product(
                     reasons, sources, destinations):
@@ -178,7 +194,7 @@ class ApiOpsExamplesTests(unittest.TestCase):
                 for dependency in ("succeeded", "skipped", "failed", "canceled"):
                     selected = [
                         target for target in targets
-                        if evaluate(definitions[f"{target}Condition"],
+                        if evaluate(condition.replace("${{ target.environment }}", target),
                                     variables, dependency)
                     ]
                     wanted = [expected] if (
@@ -188,11 +204,11 @@ class ApiOpsExamplesTests(unittest.TestCase):
                                      (kind, reason, source, destination, dependency))
 
     def test_helper_conditions_preserve_defaults_and_require_successful_plan(self):
-        ci = load(HELPERS / "api-ops-ci.yaml")["stages"][0]
+        ci = load(HELPERS / "api-ops-ci-stage.yaml")["stages"][0]
         cd = load(HELPERS / "api-ops.yaml")["stages"]
         plan = cd[0]["${{ if eq(parameters.skipPlanStage, false) }}"][0]
         publish = cd[1]
-        gate = "${{ coalesce(parameters.projectSpecs.condition, 'succeeded()') }}"
+        gate = "${{ coalesce(parameters.target.condition, parameters.projectSpecs.condition, 'succeeded()') }}"
         self.assertEqual(ci["condition"], gate)
         self.assertNotIn("condition", plan)
         self.assertNotIn("condition", publish)
@@ -203,6 +219,44 @@ class ApiOpsExamplesTests(unittest.TestCase):
         for dependency in ("succeeded", "skipped", "failed", "canceled"):
             expected = dependency == "succeeded"
             self.assertEqual(evaluate("succeeded()", {}, dependency), expected)
+
+    def test_ci_wrapper_preserves_single_connection_callers(self):
+        wrapper = load(HELPERS / "api-ops-ci.yaml")
+        defaults = {p["name"]: p.get("default") for p in wrapper["parameters"]}
+        self.assertEqual(defaults["validationTargets"], [])
+        fallback = wrapper["stages"][1]["${{ else }}"][0]
+        self.assertEqual(fallback["template"], "api-ops-ci-stage.yaml")
+        for name in ("name", "dependencies", "projectSpecs", "planStageName",
+                     "planStageDisplayName", "planEnvironment", "poolName"):
+            self.assertEqual(fallback["parameters"][name], "${{ parameters." + name + " }}")
+        self.assertNotIn("target", fallback["parameters"])
+        stage_template = load(HELPERS / "api-ops-ci-stage.yaml")
+        declared = {p["name"]: p for p in stage_template["parameters"]}
+        self.assertEqual(declared["target"]["default"], {})
+        for call in (fallback, target_stage_call()):
+            self.assertLessEqual(set(call["parameters"]), set(declared))
+            self.assertLessEqual({name for name, p in declared.items() if "default" not in p},
+                                 set(call["parameters"]))
+        mapped = target_stage_call()["parameters"]
+        self.assertEqual(
+            mapped["target"]["serviceConnectionName"], "${{ target.serviceConnectionName }}")
+        self.assertEqual(
+            mapped["planStageName"],
+            "${{ format('{0}_{1}', coalesce(parameters.planStageName, format('plan_{0}', parameters.name)), target.environment) }}",
+        )
+        job = stage_template["stages"][0]["jobs"][0]
+        self.assertEqual(job["environment"],
+                         "${{ coalesce(parameters.target.planEnvironment, parameters.projectSpecs.planEnvironment, parameters.planEnvironment) }}")
+        plan = job["strategy"]["runOnce"]["deploy"]["steps"][0]
+        self.assertEqual(plan["template"], "plan.yaml")
+        self.assertEqual(
+            plan["parameters"]["serviceConnectionName"],
+            "${{ coalesce(parameters.target.serviceConnectionName, parameters.projectSpecs.serviceConnectionName) }}",
+        )
+        self.assertEqual(
+            plan["parameters"]["environment"],
+            "${{ coalesce(parameters.target.environment, parameters.projectSpecs.environment, 'dev') }}",
+        )
 
 
 if __name__ == "__main__":

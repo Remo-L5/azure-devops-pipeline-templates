@@ -25,6 +25,7 @@ stages:
           parameters:
             dependencies: ${{ coalesce(project.dependencies, parameters.emptyDependencyList) }}
             projectSpecs: ${{ project.projectSpecs }}
+            validationTargets: ${{ coalesce(project.projectSpecs.validationTargets, parameters.emptyDependencyList) }}
             name: ${{ project.name }}
             planStageName: ${{ coalesce(project.planStageName, '') }}
             planStageDisplayName: ${{ coalesce(project.planStageDisplayName, '') }}

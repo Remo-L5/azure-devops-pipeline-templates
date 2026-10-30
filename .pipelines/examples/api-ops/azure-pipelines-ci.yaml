@@ -25,38 +25,24 @@ variables:
       iif(
       and(eq(variables['Build.Reason'], 'PullRequest'), in(variables['System.PullRequest.TargetBranch'], 'refs/heads/stage', 'stage')),
       'stage', 'none'))]
-  # PR target selection is runtime-only; keep separate, literal connections.
-  # Ignore skipped sibling stages, but never continue after failure/cancellation.
-  - name: devCondition
-    value: and(not(failed()), not(canceled()), eq(variables['environment'], 'dev'))
-  - name: stageCondition
-    value: and(not(failed()), not(canceled()), eq(variables['environment'], 'stage'))
 
 extends:
   template: /.pipelines/ci-template.yaml@templates
   parameters:
     projects:
-      - name: apiops_dev
+      - name: apiops
         projectType: api-ops
         projectSpecs:
-          condition: ${{ variables.devCondition }}
           environment: $(environment)
-          serviceConnectionName: sc-apiops-dev
           resourceGroupName: rg-apiops-$(environment)
           apimServiceName: apim-apiops-$(environment)
           apimServiceOutputFolderPath: artifacts
           configurationFilePath: configuration.$(environment).yaml
-          planEnvironment: apiops-plan-dev
           poolName: ado-devops-pool
-      - name: apiops_stage
-        projectType: api-ops
-        projectSpecs:
-          condition: ${{ variables.stageCondition }}
-          environment: $(environment)
-          serviceConnectionName: sc-apiops-stage
-          resourceGroupName: rg-apiops-$(environment)
-          apimServiceName: apim-apiops-$(environment)
-          apimServiceOutputFolderPath: artifacts
-          configurationFilePath: configuration.$(environment).yaml
-          planEnvironment: apiops-plan-stage
-          poolName: ado-devops-pool
+          validationTargets:
+            - environment: dev
+              serviceConnectionName: sc-apiops-dev
+              planEnvironment: apiops-plan-dev
+            - environment: stage
+              serviceConnectionName: sc-apiops-stage
+              planEnvironment: apiops-plan-stage
