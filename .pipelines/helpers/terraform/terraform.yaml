@@ -19,6 +19,9 @@ parameters:
     type: object
     default: {}
     displayName: 'Terraform variable file name (leave empty to use CLI variables only)'
+  - name: terraformSecureFiles
+    type: object
+    default: {}
   - name: terraformWorkspace
     type: string
     default: 'dev'
@@ -166,6 +169,7 @@ stages:
                     serviceConnection: ${{ parameters.serviceConnectionNameTfPlan }}
                     rootModuleFolderRelativePath: ${{ parameters.rootModuleFolderRelativePath }}
                     terraformOverrideVars: ${{ parameters.terraformOverrideVars }}
+                    terraformSecureFiles: ${{ parameters.terraformSecureFiles }}
                     terraformVarFileName: ${{ variables.terraformVarFileName }}
                     downloadedArtifactLocalPath: ${{ parameters.planArtifactDownload.targetPath }}
                     additionalVarFilesDirectory: ${{ parameters.additionalVarFilesDirectory }}
