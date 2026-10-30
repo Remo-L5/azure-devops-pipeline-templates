@@ -259,6 +259,60 @@ projectSpecs:
 | `resourceGroupName` | APIM resource group |
 | `apiManagementServiceBaseName` | APIM instance name |
 
+#### Consuming-repository CI and CD examples
+
+Copy [azure-pipelines-ci.yaml](.pipelines/examples/api-ops/azure-pipelines-ci.yaml)
+and [azure-pipelines-cd.yaml](.pipelines/examples/api-ops/azure-pipelines-cd.yaml)
+into the consuming repository and register them as separate Azure Pipelines.
+They call the API Ops step helpers directly so the consuming pipeline owns
+the branch/reason conditions and deployment approvals.
+
+| Pipeline event | `environment` variable | Action |
+|----------------|------------------------|--------|
+| PR targeting `dev` | `dev` | CI dry-run only |
+| PR targeting `stage` | `stage` | CI dry-run only |
+| Merge into `dev` (`IndividualCI` or `BatchedCI`) | `dev` | CD dry-run, then publish to dev |
+| Merge into `stage` (`IndividualCI` or `BatchedCI`) | `stage` | CD dry-run, then publish to stage |
+| Manual CD run (`Manual`) | `prod` | CD dry-run, then publish to production |
+| Any other reason or branch | Not selected | No matching stage runs |
+
+CI checks `System.PullRequest.TargetBranch`, accepting both `refs/heads/dev`
+and `dev` (and the corresponding stage forms) for Azure Repos/GitHub compatibility.
+After a merge, CD checks `Build.SourceBranch`, not PR variables: a completed PR
+produces a branch CI run, not a `PullRequest` run. Each selected stage defines
+the `environment` variable and passes it to the helper. The service connection,
+APIM resource names, and Azure Pipelines environment are selected explicitly;
+the helper's `environment` parameter alone does not select an APIM instance.
+Stages have no implicit dependencies, so a skipped dev stage cannot block stage
+or production. Publishing depends on a successful dry-run.
+
+Before using the examples:
+
+- Replace the GitHub repository service connection `github-template-connection`,
+  agent pool, Azure service connections, resource groups, and APIM names with
+  your own. The template repository uses `main` for illustration; pin a reviewed
+  release tag for controlled adoption.
+- Commit the APIOps artifacts under `artifacts` with the applicable publisher
+  configuration files: `configuration.dev.yaml`, `configuration.stage.yaml`,
+  and `configuration.prod.yaml`. Adjust the paths if your layout differs.
+- Create/authorize the `apiops-plan-dev`, `apiops-plan-stage`, `apiops-plan-prod`,
+  `apiops-dev`, `apiops-stage`, and `apiops-prod` Azure Pipelines environments.
+  Add approval checks to `apiops-prod` and restrict production service-connection
+  access. PR validation is a dry-run, but still authenticates to Azure; authorize
+  credentials only for trusted PRs.
+- Protect `dev` and `stage` with required PR reviews and CI build validation,
+  and disallow direct pushes/bypasses. Branch filters do not enforce protection
+  or distinguish a merge from a direct push. For Azure Repos Git, configure
+  build-validation branch policies; YAML `pr` triggers are not supported there.
+- Run CD manually only when intending a production deployment: **every manual CD
+  run targets prod**, even when `dev` or `stage` is selected in the run dialog.
+  It publishes the selected branch/revision, not an automatically promoted
+  artifact from an earlier run. Restrict allowed production source branches with
+  environment branch-control checks as appropriate.
+
+The CD pipeline is triggered by the merged commit itself, not by CI pipeline
+completion, so PR validation never directly triggers deployment.
+
 ### .NET Helpers
 
 | Template | Purpose |

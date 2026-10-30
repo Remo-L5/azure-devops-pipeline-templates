@@ -1,0 +1,57 @@
+---
+# Copy to the consuming repository and register as its PR validation pipeline.
+# Azure Repos Git: configure build-validation policies on dev and stage.
+trigger: none
+pr:
+  branches:
+    include:
+      - dev
+      - stage
+
+resources:
+  repositories:
+    - repository: templates
+      type: github
+      endpoint: github-template-connection
+      name: Remo-L5/azure-devops-pipeline-templates
+      ref: refs/heads/main
+
+parameters:
+  - name: environments
+    type: object
+    default:
+      - dev
+      - stage
+
+stages:
+  - ${{ each target in parameters.environments }}:
+      - stage: validate_${{ target }}
+        displayName: Validate API Ops (${{ target }})
+        dependsOn: []
+        condition: |
+          and(
+            succeeded(),
+            eq(variables['Build.Reason'], 'PullRequest'),
+            in(variables['System.PullRequest.TargetBranch'], 'refs/heads/${{ target }}', '${{ target }}')
+          )
+        variables:
+          - name: environment
+            value: ${{ target }}
+        jobs:
+          - deployment: plan
+            displayName: Dry-run API Ops
+            pool:
+              name: ado-devops-pool
+            environment: apiops-plan-${{ target }}
+            strategy:
+              runOnce:
+                deploy:
+                  steps:
+                    - template: /.pipelines/helpers/api-ops/plan.yaml@templates
+                      parameters:
+                        environment: ${{ variables.environment }}
+                        serviceConnectionName: sc-apiops-${{ target }}
+                        resourceGroupName: rg-apiops-${{ target }}
+                        apimServiceName: apim-apiops-${{ target }}
+                        apimServiceOutputFolderPath: artifacts
+                        configurationFilePath: configuration.${{ target }}.yaml
