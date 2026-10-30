@@ -4,7 +4,7 @@ Reusable Azure DevOps pipeline templates for deploying Azure Landing Zone (ALZ) 
 
 ## Overview
 
-This repository provides a modular, template-based approach to CI/CD pipelines for Azure deployments. It supports multiple project types including **Terraform**, **API Operations (APIOps)**, **.NET**, **Node.js**, and **React** applications—all orchestrated through a unified pipeline interface.
+This repository provides a modular, template-based approach to CI/CD pipelines for Azure deployments. It supports multiple project types including **Terraform**, **API Operations (APIOps)**, **.NET**, **Node.js**, **React**, and **Azure Static Web Apps** applications—all orchestrated through a unified pipeline interface.
 
 ## Repository Structure
 
@@ -22,6 +22,9 @@ This repository provides a modular, template-based approach to CI/CD pipelines f
     │   └── nodejs.yaml       # Install, audit, build, and test Node.js projects
     ├── react/                # React application helpers
     │   └── react.yaml        # Install, audit, build, Playwright setup, and test React projects
+    ├── static-web-app/       # Deploy prebuilt React and optional Azure Functions artifacts
+    │   ├── static-web-app.yaml # Stage definition, also used for non-deploying CI validation
+    │   └── deploy.yaml       # Download/validate artifacts, retrieve deployment key, and deploy
     ├── powershell/           # Azure CLI-authenticated PowerShell helpers
     │   ├── azure-cli-powershell-check-apply.yaml # Check/apply stage workflow
     │   └── azure-cli-powershell-script.yaml      # Run a PowerShell script with an Azure service connection
@@ -45,7 +48,7 @@ The main deployment orchestrator. Accepts a `projects` array parameter where eac
 | Property | Description |
 |----------|-------------|
 | `name` | Unique project identifier |
-| `projectType` | One of: `terraform`, `api-ops`, `api-ops-cli`, `api-center`, `dotnet`, `nodejs`, `react`, `powershell` |
+| `projectType` | One of: `terraform`, `api-ops`, `api-ops-cli`, `api-center`, `dotnet`, `nodejs`, `react`, `powershell`, `static-web-app` |
 | `dependencies` | Array of Azure DevOps stage names this project depends on |
 | `projectSpecs` | Type-specific configuration (see below) |
 
@@ -83,6 +86,7 @@ Validation-focused template for pull requests. Uses the same `projects` array st
 - API Center validation
 - PowerShell check mode
 - .NET, Node.js, and React build/test stages
+- Static Web App artifact configuration/content validation (no Azure login, key retrieval, or deployment)
 
 ## Helpers
 
@@ -288,7 +292,7 @@ projectSpecs:
 | `auditLevel` | `high` | Minimum vulnerability level that fails `npm audit` |
 | `testScript` | `test:ci` | npm script name run by the test step |
 | `publishArtifact` | `true` | Whether to publish a pipeline artifact after tests pass |
-| `artifactPath` | `./backend` | Path to publish for later deployment stages |
+| `artifactPath` | `./backend/dist` | Path to publish for later deployment stages |
 | `artifactName` | Project `name` | Pipeline artifact name |
 
 ### React Helpers
@@ -346,6 +350,110 @@ extends:
             artifactName: 'frontend'
             targetPath: '$(Pipeline.Workspace)/frontend'
 ```
+
+### Static Web App Helpers
+
+| Template | Purpose |
+|----------|---------|
+| `static-web-app.yaml` | Stage consuming artifacts from the existing React and Node.js build helpers |
+| `deploy.yaml` | Reusable steps to validate/download current-run artifacts, read the deployment key, and deploy once |
+
+Use `projectType: static-web-app` in CD or CI. Assign `role: app` to exactly one
+artifact and `role: api` to at most one optional artifact. `artifactName` must
+match the producing helper's `projectSpecs.artifactName` (which defaults to its
+project `name`); leave `publishArtifact` enabled. Artifacts are downloaded from
+the **current pipeline run**, not another pipeline or a previous run.
+
+The React helper's default `artifactPath: ./frontend/dist` already publishes a
+prebuilt site with `index.html` at its root. The Node.js helper defaults to
+`./backend/dist`, which typically omits Azure Functions metadata and dependencies.
+For a Functions backend, set its existing `artifactPath` option to `./backend`
+(the Functions app root), as below. That artifact must include root-level
+`host.json` and `package.json`, built JavaScript referenced by the Functions
+entry points, and required runtime dependencies (`node_modules`), which the
+existing helper's `npm install` / `npm run build` produce. Neither helper's
+defaults are changed, and deployment does not run npm, Oryx, or another build.
+If you publish a custom deployment folder instead, assemble that complete
+Functions layout there before publishing it.
+
+```yaml
+extends:
+  template: .pipelines/cd-template.yaml
+  parameters:
+    projects:
+      - name: frontend
+        projectType: react
+        projectSpecs:
+          workingDirectory: ./frontend
+          artifactPath: ./frontend/dist
+          artifactName: frontend
+
+      - name: backend
+        projectType: nodejs
+        projectSpecs:
+          workingDirectory: ./backend
+          artifactPath: ./backend
+          artifactName: backend
+
+      - name: deploy_site
+        projectType: static-web-app
+        dependencies:
+          - frontend
+          - backend
+        projectSpecs:
+          serviceConnectionName: sc-web-deploy
+          resourceGroupName: rg-web-dev
+          staticWebAppName: example-web-dev
+          artifacts:
+            - artifactName: frontend
+              role: app
+            - artifactName: backend
+              role: api
+```
+
+The same projects list works with `ci-template.yaml`: the build helpers publish
+their artifacts, then `deploy_site` validates the configuration and artifact
+roots without retrieving a key or deploying. For a frontend-only site, omit the
+`api` entry and its backend stage/dependency. ZIP files are not extracted; publish
+directories through `PublishPipelineArtifact@1`, as the existing helpers do.
+
+| `projectSpecs` property | Default | Description |
+|-------------------------|---------|-------------|
+| `serviceConnectionName` | Required | Azure Resource Manager service connection scoped to the target subscription |
+| `resourceGroupName` | Required | Resource group of the existing Static Web App |
+| `staticWebAppName` | Required | Existing Static Web App name |
+| `artifacts` | Required | List of `{ artifactName, role }` entries; exactly one `app`, optionally one `api` |
+| `deploymentEnvironment` | `''` | Empty deploys production; set a name for a named preview environment |
+| `poolName` | `''` | Optional self-hosted **Linux** pool with Docker, PowerShell 7, and Azure CLI |
+| `vmImage` | `ubuntu-latest` | Hosted Linux image when `poolName` is unset |
+
+Top-level `stageName`, `stageDisplayName`, and `dependencies` follow the React
+and Node.js stage conventions. For step-level use, call
+`.pipelines/helpers/static-web-app/deploy.yaml` with the same required parameters
+directly (not nested in `projectSpecs`); `validateOnly: true` disables key
+retrieval and deployment.
+
+The service connection must be authorized for the pipeline and allowed
+`Microsoft.Web/staticSites/listSecrets/action` on the target Static Web App
+(for example, through a suitably scoped Contributor role). The helper calls
+`az staticwebapp secrets list`, fails on missing/invalid keys, and registers the
+key as a secret, read-only job variable consumed by `AzureStaticWebApp@0`.
+No deployment token needs to be stored in YAML or a variable group. The task
+requires a Linux agent with Docker; Windows agents are rejected.
+
+The `api` artifact is for **Static Web Apps managed Azure Functions**, exposed
+under `/api`, not an Express/NestJS server or deployment to an existing Function
+App. Use HTTP-triggered functions and a supported managed Functions Node.js
+runtime; the build helper's `nodeVersion` does not set the hosted API runtime.
+Include `staticwebapp.config.json` in the React build output to configure routes
+and `platform.apiRuntime` where needed. Existing standalone servers and
+bring-your-own Function Apps need a separate backend deployment.
+
+Artifact checks verify the deployment roots, not all Functions entry points or
+runtime compatibility. Local regression checks:
+`python -m unittest discover -s tests -p test_static_web_app.py -v`.
+An authorized Azure DevOps template preview and deployment are still required
+to verify service permissions and hosting behavior.
 
 ## Dependencies
 

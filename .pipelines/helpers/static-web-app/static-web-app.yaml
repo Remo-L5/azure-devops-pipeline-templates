@@ -1,0 +1,43 @@
+---
+parameters:
+  - name: name
+    type: string
+  - name: dependencies
+    type: object
+    default: []
+  - name: projectSpecs
+    type: object
+    default: {}
+  - name: stageName
+    type: string
+    default: ''
+  - name: stageDisplayName
+    type: string
+    default: ''
+  - name: validateOnly
+    type: boolean
+    default: false
+
+stages:
+  - stage: ${{ coalesce(parameters.stageName, parameters.name) }}
+    displayName: ${{ coalesce(parameters.stageDisplayName, format('Static Web App {0}', parameters.name)) }}
+    ${{ if gt(length(parameters.dependencies), 0) }}:
+      dependsOn: ${{ parameters.dependencies }}
+    jobs:
+      - job: static_web_app
+        displayName: Validate or deploy Static Web App artifacts
+        pool:
+          ${{ if ne(coalesce(parameters.projectSpecs.poolName, ''), '') }}:
+            name: ${{ parameters.projectSpecs.poolName }}
+          ${{ else }}:
+            vmImage: ${{ coalesce(parameters.projectSpecs.vmImage, 'ubuntu-latest') }}
+        steps:
+          - checkout: none
+          - template: deploy.yaml
+            parameters:
+              serviceConnectionName: ${{ parameters.projectSpecs.serviceConnectionName }}
+              staticWebAppName: ${{ parameters.projectSpecs.staticWebAppName }}
+              resourceGroupName: ${{ parameters.projectSpecs.resourceGroupName }}
+              artifacts: ${{ parameters.projectSpecs.artifacts }}
+              deploymentEnvironment: ${{ coalesce(parameters.projectSpecs.deploymentEnvironment, '') }}
+              validateOnly: ${{ parameters.validateOnly }}

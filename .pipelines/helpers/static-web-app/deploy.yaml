@@ -1,0 +1,135 @@
+---
+parameters:
+  - name: serviceConnectionName
+    type: string
+  - name: staticWebAppName
+    type: string
+  - name: resourceGroupName
+    type: string
+  - name: artifacts
+    type: object
+  - name: deploymentEnvironment
+    type: string
+    default: ''
+  - name: validateOnly
+    type: boolean
+    default: false
+
+steps:
+  - task: PowerShell@2
+    displayName: Validate Static Web App configuration
+    inputs:
+      targetType: inline
+      pwsh: true
+      script: |
+        $ErrorActionPreference = 'Stop'
+        if (-not $IsLinux) {
+          throw 'Static Web App deployment requires a Linux agent with Docker.'
+        }
+        foreach ($name in @('SWA_SERVICE_CONNECTION', 'SWA_NAME', 'SWA_RESOURCE_GROUP')) {
+          if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+            throw "$name must be configured."
+          }
+        }
+        $artifacts = ConvertFrom-Json -InputObject $env:SWA_ARTIFACTS -NoEnumerate
+        if ($artifacts -isnot [array] -or $artifacts.Count -lt 1 -or $artifacts.Count -gt 2) {
+          throw 'artifacts must be a list with one app artifact and at most one api artifact.'
+        }
+        $roles = @()
+        foreach ($artifact in $artifacts) {
+          if ($artifact -isnot [PSCustomObject] -or
+              $artifact.role -cnotin @('app', 'api') -or
+              $artifact.artifactName -isnot [string] -or
+              [string]::IsNullOrWhiteSpace($artifact.artifactName)) {
+            throw 'Each artifact requires a non-empty artifactName and role app or api.'
+          }
+          if ($artifact.role -in $roles) {
+            throw 'Only one artifact per role is supported.'
+          }
+          $roles += $artifact.role
+        }
+        if ('app' -notin $roles) {
+          throw 'Exactly one app artifact is required.'
+        }
+        # Clear only this helper's download folder to avoid stale self-hosted agent files.
+        $root = Join-Path $env:PIPELINE_WORKSPACE 'static-web-app'
+        if (Test-Path -LiteralPath $root) {
+          Remove-Item -LiteralPath $root -Recurse -Force
+        }
+        New-Item -ItemType Directory -Path $root | Out-Null
+    env:
+      SWA_SERVICE_CONNECTION: ${{ parameters.serviceConnectionName }}
+      SWA_NAME: ${{ parameters.staticWebAppName }}
+      SWA_RESOURCE_GROUP: ${{ parameters.resourceGroupName }}
+      SWA_ARTIFACTS: ${{ convertToJson(parameters.artifacts) }}
+      PIPELINE_WORKSPACE: $(Pipeline.Workspace)
+
+  - ${{ each artifact in parameters.artifacts }}:
+    - task: DownloadPipelineArtifact@2
+      displayName: Download Static Web App ${{ artifact.role }} artifact
+      inputs:
+        buildType: current
+        artifactName: ${{ artifact.artifactName }}
+        targetPath: $(Pipeline.Workspace)/static-web-app/${{ artifact.role }}
+
+  - task: PowerShell@2
+    displayName: Validate Static Web App artifact contents
+    inputs:
+      targetType: inline
+      pwsh: true
+      script: |
+        $ErrorActionPreference = 'Stop'
+        $root = Join-Path $env:PIPELINE_WORKSPACE 'static-web-app'
+        if (-not (Test-Path -LiteralPath (Join-Path $root 'app/index.html') -PathType Leaf)) {
+          throw 'The app artifact must contain the prebuilt React site with index.html at its root.'
+        }
+        $artifacts = ConvertFrom-Json -InputObject $env:SWA_ARTIFACTS
+        foreach ($artifact in $artifacts) {
+          if ($artifact.role -eq 'api') {
+            foreach ($file in @('host.json', 'package.json')) {
+              if (-not (Test-Path -LiteralPath (Join-Path $root "api/$file") -PathType Leaf)) {
+                throw "The api artifact must contain a complete Node.js Azure Functions app including $file at its root. Set the Node.js helper artifactPath to the Functions app root."
+              }
+            }
+          }
+        }
+    env:
+      SWA_ARTIFACTS: ${{ convertToJson(parameters.artifacts) }}
+      PIPELINE_WORKSPACE: $(Pipeline.Workspace)
+
+  - ${{ if eq(parameters.validateOnly, false) }}:
+    - task: AzureCLI@2
+      displayName: Read Static Web App deployment key
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnectionName }}
+        scriptType: pscore
+        scriptLocation: inlineScript
+        visibleAzLogin: false
+        inlineScript: |
+          $ErrorActionPreference = 'Stop'
+          $token = az staticwebapp secrets list --name $env:SWA_NAME --resource-group $env:SWA_RESOURCE_GROUP --query properties.apiKey --output tsv --only-show-errors
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Failed to read the Static Web App deployment key using the service connection.'
+          }
+          if ($token -isnot [string] -or [string]::IsNullOrWhiteSpace($token) -or $token -match '\s') {
+            throw 'Azure returned an empty or invalid Static Web App deployment key.'
+          }
+          $escapedToken = $token.Replace('%', '%AZP25').Replace("`r", '%0D').Replace("`n", '%0A')
+          Write-Host "##vso[task.setvariable variable=staticWebAppDeploymentToken;issecret=true;isReadOnly=true]$escapedToken"
+      env:
+        SWA_NAME: ${{ parameters.staticWebAppName }}
+        SWA_RESOURCE_GROUP: ${{ parameters.resourceGroupName }}
+
+    - task: AzureStaticWebApp@0
+      displayName: Deploy Static Web App
+      inputs:
+        workingDirectory: $(Pipeline.Workspace)/static-web-app
+        app_location: app
+        output_location: ''
+        skip_app_build: true
+        skip_api_build: true
+        ${{ each artifact in parameters.artifacts }}:
+          ${{ if eq(artifact.role, 'api') }}:
+            api_location: api
+        deployment_environment: ${{ parameters.deploymentEnvironment }}
+        azure_static_web_apps_api_token: $(staticWebAppDeploymentToken)
