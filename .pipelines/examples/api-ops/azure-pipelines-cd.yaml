@@ -18,63 +18,29 @@ resources:
 
 variables:
   - name: environment
-    value: >-
-      $[iif(
-      eq(variables['Build.Reason'], 'Manual'), 'prod',
-      iif(
-      and(in(variables['Build.Reason'], 'IndividualCI', 'BatchedCI'), eq(variables['Build.SourceBranch'], 'refs/heads/dev')),
-      'dev',
-      iif(
-      and(in(variables['Build.Reason'], 'IndividualCI', 'BatchedCI'), eq(variables['Build.SourceBranch'], 'refs/heads/stage')),
-      'stage', 'none')))]
-  # Ignore skipped sibling stages, but never continue after failure/cancellation.
-  - name: devCondition
-    value: and(not(failed()), not(canceled()), eq(variables['environment'], 'dev'))
-  - name: stageCondition
-    value: and(not(failed()), not(canceled()), eq(variables['environment'], 'stage'))
-  - name: prodCondition
-    value: and(not(failed()), not(canceled()), eq(variables['environment'], 'prod'))
+    ${{ if eq(variables['Build.Reason'], 'Manual') }}:
+      value: prod
+    ${{ elseif and(in(variables['Build.Reason'], 'IndividualCI', 'BatchedCI'), eq(variables['Build.SourceBranch'], 'refs/heads/dev')) }}:
+      value: dev
+    ${{ elseif and(in(variables['Build.Reason'], 'IndividualCI', 'BatchedCI'), eq(variables['Build.SourceBranch'], 'refs/heads/stage')) }}:
+      value: stage
+    ${{ else }}:
+      # Unsupported triggers fail resource resolution instead of targeting Azure.
+      value: none
 
 extends:
   template: /.pipelines/cd-template.yaml@templates
   parameters:
     projects:
-      - name: apiops_dev
+      - name: apiops
         projectType: api-ops
         projectSpecs:
-          condition: ${{ variables.devCondition }}
-          environment: $(environment)
-          serviceConnectionName: sc-apiops-dev
-          resourceGroupName: rg-apiops-dev
-          apimServiceName: apim-apiops-dev
+          environment: ${{ variables.environment }}
+          serviceConnectionName: sc-apiops-${{ variables.environment }}
+          resourceGroupName: rg-apiops-${{ variables.environment }}
+          apimServiceName: apim-apiops-${{ variables.environment }}
           apimServiceOutputFolderPath: artifacts
-          configurationFilePath: configuration.dev.yaml
-          planEnvironment: apiops-plan-dev
-          deployEnvironment: apiops-dev
-          poolName: ado-devops-pool
-      - name: apiops_stage
-        projectType: api-ops
-        projectSpecs:
-          condition: ${{ variables.stageCondition }}
-          environment: $(environment)
-          serviceConnectionName: sc-apiops-stage
-          resourceGroupName: rg-apiops-stage
-          apimServiceName: apim-apiops-stage
-          apimServiceOutputFolderPath: artifacts
-          configurationFilePath: configuration.stage.yaml
-          planEnvironment: apiops-plan-stage
-          deployEnvironment: apiops-stage
-          poolName: ado-devops-pool
-      - name: apiops_prod
-        projectType: api-ops
-        projectSpecs:
-          condition: ${{ variables.prodCondition }}
-          environment: $(environment)
-          serviceConnectionName: sc-apiops-prod
-          resourceGroupName: rg-apiops-prod
-          apimServiceName: apim-apiops-prod
-          apimServiceOutputFolderPath: artifacts
-          configurationFilePath: configuration.prod.yaml
-          planEnvironment: apiops-plan-prod
-          deployEnvironment: apiops-prod
+          configurationFilePath: configuration.${{ variables.environment }}.yaml
+          planEnvironment: apiops-plan-${{ variables.environment }}
+          deployEnvironment: apiops-${{ variables.environment }}
           poolName: ado-devops-pool

@@ -25,6 +25,7 @@ variables:
       iif(
       and(eq(variables['Build.Reason'], 'PullRequest'), in(variables['System.PullRequest.TargetBranch'], 'refs/heads/stage', 'stage')),
       'stage', 'none'))]
+  # PR target selection is runtime-only; keep separate, literal connections.
   # Ignore skipped sibling stages, but never continue after failure/cancellation.
   - name: devCondition
     value: and(not(failed()), not(canceled()), eq(variables['environment'], 'dev'))
@@ -41,10 +42,10 @@ extends:
           condition: ${{ variables.devCondition }}
           environment: $(environment)
           serviceConnectionName: sc-apiops-dev
-          resourceGroupName: rg-apiops-dev
-          apimServiceName: apim-apiops-dev
+          resourceGroupName: rg-apiops-$(environment)
+          apimServiceName: apim-apiops-$(environment)
           apimServiceOutputFolderPath: artifacts
-          configurationFilePath: configuration.dev.yaml
+          configurationFilePath: configuration.$(environment).yaml
           planEnvironment: apiops-plan-dev
           poolName: ado-devops-pool
       - name: apiops_stage
@@ -53,9 +54,9 @@ extends:
           condition: ${{ variables.stageCondition }}
           environment: $(environment)
           serviceConnectionName: sc-apiops-stage
-          resourceGroupName: rg-apiops-stage
-          apimServiceName: apim-apiops-stage
+          resourceGroupName: rg-apiops-$(environment)
+          apimServiceName: apim-apiops-$(environment)
           apimServiceOutputFolderPath: artifacts
-          configurationFilePath: configuration.stage.yaml
+          configurationFilePath: configuration.$(environment).yaml
           planEnvironment: apiops-plan-stage
           poolName: ado-devops-pool

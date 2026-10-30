@@ -258,7 +258,7 @@ projectSpecs:
 | `environment` | Target environment |
 | `resourceGroupName` | APIM resource group |
 | `apiManagementServiceBaseName` | APIM instance name |
-| `condition` | Optional `projectSpecs` stage condition for API Ops CI/CD; defaults to `succeeded()`. Publish also requires a successful dependency (the plan stage unless skipped). |
+| `condition` | Optional `projectSpecs` stage condition for API Ops CI; defaults to `succeeded()`. |
 
 #### Consuming-repository CI and CD examples
 
@@ -277,27 +277,38 @@ the plan/publish stages.
 | Merge into `dev` (`IndividualCI` or `BatchedCI`) | `dev` | CD dry-run, then publish to dev |
 | Merge into `stage` (`IndividualCI` or `BatchedCI`) | `stage` | CD dry-run, then publish to stage |
 | Manual CD run (`Manual`) | `prod` | CD dry-run, then publish to production |
-| Any other reason or branch | `none` | All API Ops stages are skipped |
+| Any other CI reason or branch | `none` | All CI stages are skipped |
+| Any other CD reason or branch | `none` | Resource validation fails; no deployment |
 
 CI checks `System.PullRequest.TargetBranch`, accepting both `refs/heads/dev`
 and `dev` (and the corresponding stage forms) for Azure Repos/GitHub compatibility.
 After a merge, CD checks `Build.SourceBranch`, not PR variables: a completed PR
 produces a branch CI run, not a `PullRequest` run.
 
-The root `environment` variable uses a runtime expression (`$[...]`) because
-the PR target branch is not available during template expansion. Each project's
+In CI, the root `environment` variable uses a runtime expression (`$[...]`)
+because the PR target branch is not available during template expansion. Each project's
 `projectSpecs.environment` passes it through as `$(environment)`, not
 `${{ variables.environment }}`. Separate project entries keep service connections
 and Azure Pipelines environments literal so Azure DevOps can resolve and
 authorize them before execution. Do not construct service-connection names from
 the runtime-selected environment.
 
-The `devCondition`, `stageCondition`, and `prodCondition` variables contain
-condition expressions, passed unchanged through `projectSpecs.condition` to
-the API Ops stage helpers. They allow skipped sibling stages without continuing
-after a failure or cancellation. Publish additionally requires its plan stage to
-succeed. When no condition is supplied, existing helpers retain their normal
-`succeeded()` behavior, including when `skipPlanStage` is enabled.
+CI's `devCondition` and `stageCondition` variables contain condition expressions,
+passed unchanged through `projectSpecs.condition` to the CI stage helper.
+They allow skipped sibling stages without continuing after a failure or
+cancellation. Only the matching environment runs. APIM names, resource-group
+names, and configuration paths use `$(environment)` at runtime; stage names
+remain static, and service connections and pipeline environments stay literal.
+
+CD uses compile-time variable expressions (`${{ if ... }}`) instead:
+`Build.Reason` and `Build.SourceBranch` are available during template expansion.
+It declares just one project with the static name `apiops`, passing
+`${{ variables.environment }}` into its configuration and resource names.
+This resolves the environment-specific service connection before authorization,
+without per-environment stage conditions. The common template's normal
+dependencies still prevent publish after a failed plan. Unsupported CD triggers
+select `none`, which intentionally has no service connection or pipeline
+environment; do not provision resources for that sentinel.
 
 Before using the examples:
 

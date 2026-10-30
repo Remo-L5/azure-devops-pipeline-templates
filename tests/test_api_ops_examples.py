@@ -69,10 +69,22 @@ def evaluate(expression, variables, dependency="succeeded"):
     return result
 
 
+def select_environment(data, variables):
+    definition = next(v for v in data["variables"] if v["name"] == "environment")
+    if "value" in definition:
+        return evaluate(definition["value"], variables)
+    for key, branch in definition.items():
+        if key == "${{ else }}":
+            return branch["value"]
+        match = re.fullmatch(r"\$\{\{ (?:if|elseif) (.+) \}\}", key)
+        if match and evaluate(match[1], variables):
+            return branch["value"]
+    raise ValueError("No matching environment definition")
+
+
 class ApiOpsExamplesTests(unittest.TestCase):
-    def test_examples_extend_common_templates_with_literal_connections(self):
-        for kind, targets in (("ci", ["dev", "stage"]),
-                              ("cd", ["dev", "stage", "prod"])):
+    def test_examples_extend_common_templates_with_resolvable_connections(self):
+        for kind in ("ci", "cd"):
             data = load(EXAMPLES / f"azure-pipelines-{kind}.yaml")
             self.assertNotIn("stages", data)
             self.assertNotIn("jobs", data)
@@ -86,17 +98,40 @@ class ApiOpsExamplesTests(unittest.TestCase):
             self.assertEqual(api_ops[0]["parameters"]["projectSpecs"],
                              "${{ project.projectSpecs }}")
             projects = data["extends"]["parameters"]["projects"]
-            self.assertEqual(len(projects), len(targets))
-            for project, target in zip(projects, targets):
-                specs = project["projectSpecs"]
+            self.assertEqual(len(projects), 2 if kind == "ci" else 1)
+            for project in projects:
                 self.assertEqual(project["projectType"], "api-ops")
-                self.assertEqual(specs["environment"], "$(environment)")
-                self.assertEqual(specs["serviceConnectionName"], f"sc-apiops-{target}")
-                self.assertEqual(specs["condition"],
-                                 "${{ variables." + target + "Condition }}")
-                self.assertEqual(specs["planEnvironment"], f"apiops-plan-{target}")
-                if kind == "cd":
-                    self.assertEqual(specs["deployEnvironment"], f"apiops-{target}")
+                self.assertNotIn("$", project["name"])
+            if kind == "ci":
+                for project, target in zip(projects, ("dev", "stage")):
+                    specs = project["projectSpecs"]
+                    self.assertEqual(specs["environment"], "$(environment)")
+                    self.assertEqual(specs["serviceConnectionName"], f"sc-apiops-{target}")
+                    self.assertEqual(specs["condition"],
+                                     "${{ variables." + target + "Condition }}")
+                    self.assertEqual(specs["planEnvironment"], f"apiops-plan-{target}")
+                    self.assertEqual(specs["resourceGroupName"], "rg-apiops-$(environment)")
+                    self.assertEqual(specs["apimServiceName"], "apim-apiops-$(environment)")
+                    self.assertEqual(specs["configurationFilePath"],
+                                     "configuration.$(environment).yaml")
+            else:
+                self.assertEqual(projects[0]["name"], "apiops")
+                specs = projects[0]["projectSpecs"]
+                self.assertNotIn("condition", specs)
+                self.assertEqual(specs["environment"], "${{ variables.environment }}")
+                self.assertEqual(specs["serviceConnectionName"],
+                                 "sc-apiops-${{ variables.environment }}")
+                self.assertEqual(specs["resourceGroupName"],
+                                 "rg-apiops-${{ variables.environment }}")
+                self.assertEqual(specs["apimServiceName"],
+                                 "apim-apiops-${{ variables.environment }}")
+                self.assertEqual(specs["configurationFilePath"],
+                                 "configuration.${{ variables.environment }}.yaml")
+                self.assertEqual(specs["planEnvironment"],
+                                 "apiops-plan-${{ variables.environment }}")
+                self.assertEqual(specs["deployEnvironment"],
+                                 "apiops-${{ variables.environment }}")
+                self.assertEqual([v["name"] for v in data["variables"]], ["environment"])
             self.assertEqual(data["pr"] if kind == "cd" else data["trigger"], "none")
             branches = data["trigger"] if kind == "cd" else data["pr"]
             self.assertEqual(branches["branches"]["include"], ["dev", "stage"])
@@ -110,7 +145,7 @@ class ApiOpsExamplesTests(unittest.TestCase):
                         "refs/heads/stage", "refs/heads/main")
         for kind in ("ci", "cd"):
             data = load(EXAMPLES / f"azure-pipelines-{kind}.yaml")
-            definitions = {v["name"]: v["value"] for v in data["variables"]}
+            definitions = {v["name"]: v.get("value") for v in data["variables"]}
             targets = ("dev", "stage") if kind == "ci" else ("dev", "stage", "prod")
             for reason, source, destination in itertools.product(
                     reasons, sources, destinations):
@@ -131,8 +166,15 @@ class ApiOpsExamplesTests(unittest.TestCase):
                         for target in ("dev", "stage"):
                             if source == f"refs/heads/{target}":
                                 expected = target
-                variables["environment"] = evaluate(definitions["environment"], variables)
+                variables["environment"] = select_environment(data, variables)
                 self.assertEqual(variables["environment"], expected)
+                if kind == "cd":
+                    specs = data["extends"]["parameters"]["projects"][0]["projectSpecs"]
+                    connection = specs["serviceConnectionName"].replace(
+                        "${{ variables.environment }}", variables["environment"])
+                    self.assertEqual(connection, f"sc-apiops-{expected}")
+                    self.assertNotIn("$", connection)
+                    continue
                 for dependency in ("succeeded", "skipped", "failed", "canceled"):
                     selected = [
                         target for target in targets
@@ -152,9 +194,8 @@ class ApiOpsExamplesTests(unittest.TestCase):
         publish = cd[1]
         gate = "${{ coalesce(parameters.projectSpecs.condition, 'succeeded()') }}"
         self.assertEqual(ci["condition"], gate)
-        self.assertEqual(plan["condition"], gate)
-        self.assertEqual(publish["condition"],
-                         "and(succeeded(), ${{ coalesce(parameters.projectSpecs.condition, 'true') }})")
+        self.assertNotIn("condition", plan)
+        self.assertNotIn("condition", publish)
         self.assertEqual(
             publish["${{ if eq(parameters.skipPlanStage, false) }}"]["dependsOn"],
             "${{ coalesce(parameters.planStageName, format('plan_{0}', parameters.name)) }}",
@@ -162,15 +203,6 @@ class ApiOpsExamplesTests(unittest.TestCase):
         for dependency in ("succeeded", "skipped", "failed", "canceled"):
             expected = dependency == "succeeded"
             self.assertEqual(evaluate("succeeded()", {}, dependency), expected)
-            for environment in ("dev", "none"):
-                expression = (
-                    "and(succeeded(), and(not(failed()), not(canceled()), "
-                    "eq(variables['environment'], 'dev')))"
-                )
-                self.assertEqual(
-                    evaluate(expression, {"environment": environment}, dependency),
-                    expected and environment == "dev",
-                )
 
 
 if __name__ == "__main__":
