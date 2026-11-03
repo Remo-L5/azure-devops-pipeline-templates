@@ -113,7 +113,8 @@ class StaticWebAppTests(unittest.TestCase):
                 self.assertEqual(result.returncode == 0, success, result.stderr)
 
     def test_secret_lookup_and_failure_handling(self):
-        script = self.steps[3][DEPLOY_CONDITION][0]["inputs"]["inlineScript"]
+        script = next(step[DEPLOY_CONDITION] for step in self.steps
+                      if DEPLOY_CONDITION in step)[0]["inputs"]["inlineScript"]
         prefix = """
 $ErrorActionPreference = 'Stop'
 function az {
@@ -168,7 +169,7 @@ function az {
             self.assertIn("project.dependencies", call["parameters"]["dependencies"])
 
         stage = load(HELPERS / "static-web-app" / "static-web-app.yaml")
-        job = stage["stages"][0]["jobs"][0]
+        job = stage["stages"][0]["jobs"][0]["parameters"]
         self.assertEqual(job["steps"][0], {"checkout": "none"})
         self.assertEqual(job["steps"][1]["parameters"]["validateOnly"],
                          "${{ parameters.validateOnly }}")
@@ -181,7 +182,8 @@ function az {
             "artifactName": "${{ artifact.artifactName }}",
             "targetPath": "$(Pipeline.Workspace)/static-web-app/${{ artifact.role }}",
         })
-        deploy_steps = self.steps[3][DEPLOY_CONDITION]
+        deploy_steps = next(step[DEPLOY_CONDITION] for step in self.steps
+                            if DEPLOY_CONDITION in step)
         self.assertEqual([step["task"] for step in deploy_steps],
                          ["AzureCLI@2", "AzureStaticWebApp@0"])
         self.assertEqual(deploy_steps[0]["inputs"]["azureSubscription"],
@@ -206,7 +208,9 @@ function az {
                 "${{ if ne(coalesce(parameters.projectSpecs.publishArtifact, true), false) }}"
             ][0]
             self.assertEqual(publish["task"], "PublishPipelineArtifact@1")
-            self.assertEqual(publish["inputs"]["targetPath"],
+            inputs = publish["inputs"]
+            target = inputs.get("targetPath", inputs.get("${{ else }}", {}).get("targetPath"))
+            self.assertEqual(target,
                              "${{ coalesce(parameters.projectSpecs.artifactPath, '"
                              + default_path + "') }}")
             self.assertEqual(publish["inputs"]["artifact"],

@@ -1,0 +1,27 @@
+---
+parameters:
+  - name: azureDevOpsEnvironment
+    type: string
+    default: ''
+  - name: validateOnly
+    type: boolean
+    default: false
+  - name: steps
+    type: stepList
+    default: []
+
+jobs:
+  - ${{ if and(eq(parameters.validateOnly, false), ne(parameters.azureDevOpsEnvironment, '')) }}:
+    - deployment: deploy
+      displayName: Deploy application artifacts
+      environment: ${{ parameters.azureDevOpsEnvironment }}
+      strategy:
+        runOnce:
+          deploy:
+            steps:
+              - download: none
+              - ${{ parameters.steps }}
+  - ${{ else }}:
+    - job: validate_or_deploy
+      displayName: Validate or deploy application artifacts
+      steps: ${{ parameters.steps }}

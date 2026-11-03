@@ -25,8 +25,7 @@ parameters:
 stages:
   - stage: ${{ coalesce(parameters.stageName, parameters.name) }}
     displayName: ${{ coalesce(parameters.stageDisplayName, format('Build {0}', parameters.name)) }}
-    ${{ if gt(length(parameters.dependencies), 0) }}:
-      dependsOn: ${{ parameters.dependencies }}
+    dependsOn: ${{ parameters.dependencies }}
     jobs:
       - job: build
         displayName: Build and test Node.js
@@ -42,9 +41,23 @@ stages:
               version: ${{ coalesce(parameters.projectSpecs.nodeVersion, '24.x') }}
 
           - script: |
-              npm install
+              npm ${{ coalesce(parameters.projectSpecs.installCommand, 'install') }}
+            displayName: Node.js - install dependencies
+            workingDirectory: ${{ coalesce(parameters.projectSpecs.workingDirectory, './backend') }}
+
+          - ${{ if ne(coalesce(parameters.projectSpecs.lintScript, ''), '') }}:
+            - script: npm run ${{ parameters.projectSpecs.lintScript }}
+              displayName: Node.js - lint
+              workingDirectory: ${{ coalesce(parameters.projectSpecs.workingDirectory, './backend') }}
+
+          - ${{ if ne(coalesce(parameters.projectSpecs.typeCheckScript, ''), '') }}:
+            - script: npm run ${{ parameters.projectSpecs.typeCheckScript }}
+              displayName: Node.js - type check
+              workingDirectory: ${{ coalesce(parameters.projectSpecs.workingDirectory, './backend') }}
+
+          - script: |
               npm run build
-            displayName: ${{ coalesce(parameters.projectSpecs.buildDisplayName, 'Node.js - install and build') }}
+            displayName: ${{ coalesce(parameters.projectSpecs.buildDisplayName, 'Node.js - build') }}
             workingDirectory: ${{ coalesce(parameters.projectSpecs.workingDirectory, './backend') }}
 
           - script: |
@@ -57,10 +70,21 @@ stages:
             displayName: ${{ coalesce(parameters.projectSpecs.testDisplayName, 'Node.js - run unit tests') }}
             workingDirectory: ${{ coalesce(parameters.projectSpecs.workingDirectory, './backend') }}
 
+          - ${{ if eq(parameters.projectSpecs.packageFunctions, true) }}:
+            - template: package-functions.yaml
+              parameters:
+                workingDirectory: ${{ coalesce(parameters.projectSpecs.workingDirectory, './backend') }}
+                ${{ each spec in parameters.projectSpecs }}:
+                  ${{ if eq(spec.key, 'functionPackageFiles') }}:
+                    files: ${{ spec.value }}
+
           - ${{ if ne(coalesce(parameters.projectSpecs.publishArtifact, true), false) }}:
             - task: PublishPipelineArtifact@1
               displayName: ${{ coalesce(parameters.projectSpecs.publishDisplayName, 'Publish Node.js artifact') }}
               inputs:
-                targetPath: ${{ coalesce(parameters.projectSpecs.artifactPath, './backend/dist') }}
+                ${{ if eq(parameters.projectSpecs.packageFunctions, true) }}:
+                  targetPath: $(Build.ArtifactStagingDirectory)/functions
+                ${{ else }}:
+                  targetPath: ${{ coalesce(parameters.projectSpecs.artifactPath, './backend/dist') }}
                 artifact: ${{ coalesce(parameters.projectSpecs.artifactName, parameters.name) }}
                 publishLocation: pipeline

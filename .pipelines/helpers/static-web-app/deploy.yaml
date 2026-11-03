@@ -97,6 +97,12 @@ steps:
       SWA_ARTIFACTS: ${{ convertToJson(parameters.artifacts) }}
       PIPELINE_WORKSPACE: $(Pipeline.Workspace)
 
+  - ${{ each artifact in parameters.artifacts }}:
+    - ${{ if eq(artifact.role, 'api') }}:
+      - template: ../nodejs/validate-functions.yaml
+        parameters:
+          directory: $(Pipeline.Workspace)/static-web-app/api
+
   - ${{ if eq(parameters.validateOnly, false) }}:
     - task: AzureCLI@2
       displayName: Read Static Web App deployment key

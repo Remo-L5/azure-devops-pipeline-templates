@@ -276,6 +276,23 @@ stages:
               name: ${{ project.name }}
               stageName: ${{ coalesce(project.stageName, '') }}
               stageDisplayName: ${{ coalesce(project.stageDisplayName, '') }}
+      - ${{ if eq(project.projectType, 'python') }}:
+          - template: helpers/python/python.yaml
+            parameters:
+              dependencies: ${{ coalesce(project.dependencies, parameters.emptyDependencyList) }}
+              projectSpecs: ${{ project.projectSpecs }}
+              name: ${{ project.name }}
+              stageName: ${{ coalesce(project.stageName, '') }}
+              stageDisplayName: ${{ coalesce(project.stageDisplayName, '') }}
+      - ${{ if or(eq(project.projectType, 'app-service'), eq(project.projectType, 'function-app')) }}:
+          - template: helpers/app-service/app-service.yaml
+            parameters:
+              dependencies: ${{ coalesce(project.dependencies, parameters.emptyDependencyList) }}
+              projectSpecs: ${{ project.projectSpecs }}
+              name: ${{ project.name }}
+              stageName: ${{ coalesce(project.stageName, '') }}
+              stageDisplayName: ${{ coalesce(project.stageDisplayName, '') }}
+              functionApp: ${{ eq(project.projectType, 'function-app') }}
       - ${{ if eq(project.projectType, 'powershell') }}:
           - template: helpers/powershell/azure-cli-powershell-check-apply.yaml
             parameters:
