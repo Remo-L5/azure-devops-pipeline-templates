@@ -1,0 +1,80 @@
+---
+parameters:
+  - name: directory
+    type: string
+
+steps:
+  - task: PowerShell@2
+    displayName: Validate Node.js Functions package
+    inputs:
+      targetType: inline
+      pwsh: true
+      script: |
+        $ErrorActionPreference = 'Stop'
+        $root = [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $env:FUNCTIONS_DIRECTORY).Path)
+        function Assert-PackagePath([string]$path) {
+          $relative = [IO.Path]::GetRelativePath($root, [IO.Path]::GetFullPath($path))
+          if ([IO.Path]::IsPathRooted($relative) -or $relative -match '^\.\.([\\/]|$)') {
+            throw 'Functions entry points must stay inside the deployment package.'
+          }
+        }
+        function Expand-EntryPattern([string]$pattern) {
+          if ($pattern -match '^(.*?)\{([^{}]+)\}(.*)$') {
+            $prefix = $Matches[1]
+            $suffix = $Matches[3]
+            foreach ($part in $Matches[2].Split(',')) {
+              Expand-EntryPattern "$prefix$part$suffix"
+            }
+          } else {
+            $pattern
+          }
+        }
+        $hostConfig = Get-Content -LiteralPath (Join-Path $root 'host.json') -Raw | ConvertFrom-Json
+        if ($hostConfig.version -ne '2.0') {
+          throw 'host.json must declare Functions host version 2.0.'
+        }
+        $package = Get-Content -LiteralPath (Join-Path $root 'package.json') -Raw | ConvertFrom-Json
+        if ($package.main) {
+          $entries = @(
+            foreach ($pattern in (Expand-EntryPattern $package.main)) {
+              if ([IO.Path]::IsPathRooted($pattern) -or $pattern -match '(^|[\\/])\.\.($|[\\/])') {
+                throw 'Functions main must be relative to the deployment package without parent traversal.'
+              }
+              $entryPath = Join-Path $root $pattern
+              if (Test-Path -Path $entryPath) { Get-ChildItem -Path $entryPath -File }
+            }
+          )
+          if ($entries.Count -eq 0) {
+            throw 'package.json main does not match any compiled Functions entry points.'
+          }
+          foreach ($entry in $entries) {
+            Assert-PackagePath $entry.FullName
+            if ($entry.Extension -notin @('.js', '.cjs', '.mjs')) {
+              throw 'Functions entry points must be compiled JavaScript files.'
+            }
+          }
+        } else {
+          $functions = @(Get-ChildItem -Path (Join-Path $root '*/function.json') -File)
+          if ($functions.Count -eq 0) {
+            throw 'A Functions package requires package.json main or function.json definitions.'
+          }
+          foreach ($function in $functions) {
+            $config = Get-Content -LiteralPath $function.FullName -Raw | ConvertFrom-Json
+            $scriptFile = if ($config.scriptFile) { $config.scriptFile } else { 'index.js' }
+            $entryPath = Join-Path $function.DirectoryName $scriptFile
+            Assert-PackagePath $entryPath
+            if (-not (Test-Path -LiteralPath $entryPath -PathType Leaf)) {
+              throw 'A function.json scriptFile does not exist in the deployment package.'
+            }
+            if ([IO.Path]::GetExtension($entryPath) -notin @('.js', '.cjs', '.mjs')) {
+              throw 'Functions scriptFile targets must be compiled JavaScript files.'
+            }
+          }
+        }
+        foreach ($dependency in $package.dependencies.PSObject.Properties.Name) {
+          if ($dependency -and -not (Test-Path -LiteralPath (Join-Path $root "node_modules/$dependency/package.json") -PathType Leaf)) {
+            throw "Missing Functions runtime dependency: $dependency"
+          }
+        }
+    env:
+      FUNCTIONS_DIRECTORY: ${{ parameters.directory }}

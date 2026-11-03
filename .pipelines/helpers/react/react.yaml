@@ -25,8 +25,7 @@ parameters:
 stages:
   - stage: ${{ coalesce(parameters.stageName, parameters.name) }}
     displayName: ${{ coalesce(parameters.stageDisplayName, format('Build {0}', parameters.name)) }}
-    ${{ if gt(length(parameters.dependencies), 0) }}:
-      dependsOn: ${{ parameters.dependencies }}
+    dependsOn: ${{ parameters.dependencies }}
     jobs:
       - job: build
         displayName: Build and test React
@@ -42,9 +41,23 @@ stages:
               version: ${{ coalesce(parameters.projectSpecs.nodeVersion, '24.x') }}
 
           - script: |
-              npm install
+              npm ${{ coalesce(parameters.projectSpecs.installCommand, 'install') }}
+            displayName: React - install dependencies
+            workingDirectory: ${{ coalesce(parameters.projectSpecs.workingDirectory, './frontend') }}
+
+          - ${{ if ne(coalesce(parameters.projectSpecs.lintScript, ''), '') }}:
+            - script: npm run ${{ parameters.projectSpecs.lintScript }}
+              displayName: React - lint
+              workingDirectory: ${{ coalesce(parameters.projectSpecs.workingDirectory, './frontend') }}
+
+          - ${{ if ne(coalesce(parameters.projectSpecs.typeCheckScript, ''), '') }}:
+            - script: npm run ${{ parameters.projectSpecs.typeCheckScript }}
+              displayName: React - type check
+              workingDirectory: ${{ coalesce(parameters.projectSpecs.workingDirectory, './frontend') }}
+
+          - script: |
               npm run build
-            displayName: ${{ coalesce(parameters.projectSpecs.buildDisplayName, 'React - install and build') }}
+            displayName: ${{ coalesce(parameters.projectSpecs.buildDisplayName, 'React - build') }}
             workingDirectory: ${{ coalesce(parameters.projectSpecs.workingDirectory, './frontend') }}
 
           - script: |

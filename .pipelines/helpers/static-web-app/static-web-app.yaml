@@ -1,0 +1,44 @@
+---
+parameters:
+  - name: name
+    type: string
+  - name: dependencies
+    type: object
+    default: []
+  - name: projectSpecs
+    type: object
+    default: {}
+  - name: stageName
+    type: string
+    default: ''
+  - name: stageDisplayName
+    type: string
+    default: ''
+  - name: validateOnly
+    type: boolean
+    default: false
+
+stages:
+  - stage: ${{ coalesce(parameters.stageName, parameters.name) }}
+    displayName: ${{ coalesce(parameters.stageDisplayName, format('Static Web App {0}', parameters.name)) }}
+    dependsOn: ${{ parameters.dependencies }}
+    pool:
+      ${{ if ne(coalesce(parameters.projectSpecs.poolName, ''), '') }}:
+        name: ${{ parameters.projectSpecs.poolName }}
+      ${{ else }}:
+        vmImage: ${{ coalesce(parameters.projectSpecs.vmImage, 'ubuntu-latest') }}
+    jobs:
+      - template: ../common/artifact-deployment-job.yaml
+        parameters:
+          azureDevOpsEnvironment: ${{ coalesce(parameters.projectSpecs.azureDevOpsEnvironment, '') }}
+          validateOnly: ${{ parameters.validateOnly }}
+          steps:
+            - checkout: none
+            - template: /.pipelines/helpers/static-web-app/deploy.yaml
+              parameters:
+                serviceConnectionName: ${{ parameters.projectSpecs.serviceConnectionName }}
+                staticWebAppName: ${{ parameters.projectSpecs.staticWebAppName }}
+                resourceGroupName: ${{ parameters.projectSpecs.resourceGroupName }}
+                artifacts: ${{ parameters.projectSpecs.artifacts }}
+                deploymentEnvironment: ${{ coalesce(parameters.projectSpecs.deploymentEnvironment, '') }}
+                validateOnly: ${{ parameters.validateOnly }}

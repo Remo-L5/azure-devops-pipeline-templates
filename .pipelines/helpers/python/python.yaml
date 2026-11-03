@@ -1,0 +1,87 @@
+---
+parameters:
+  - name: name
+    type: string
+  - name: dependencies
+    type: object
+    default: []
+  - name: projectSpecs
+    type: object
+    default: {}
+  - name: stageName
+    type: string
+    default: ''
+  - name: stageDisplayName
+    type: string
+    default: ''
+
+stages:
+  - stage: ${{ coalesce(parameters.stageName, parameters.name) }}
+    displayName: ${{ coalesce(parameters.stageDisplayName, format('Build {0}', parameters.name)) }}
+    dependsOn: ${{ parameters.dependencies }}
+    jobs:
+      - job: build
+        displayName: Test and package Python application
+        pool:
+          ${{ if ne(coalesce(parameters.projectSpecs.poolName, ''), '') }}:
+            name: ${{ parameters.projectSpecs.poolName }}
+          ${{ else }}:
+            vmImage: ${{ coalesce(parameters.projectSpecs.vmImage, 'ubuntu-latest') }}
+        steps:
+          - task: UsePythonVersion@0
+            displayName: Install Python
+            inputs:
+              versionSpec: ${{ coalesce(parameters.projectSpecs.pythonVersion, '3.11') }}
+
+          - script: |
+              python -m pip install -r "${{ coalesce(parameters.projectSpecs.requirementsFile, 'requirements.txt') }}"
+            displayName: Install Python dependencies
+            workingDirectory: ${{ coalesce(parameters.projectSpecs.workingDirectory, './backend') }}
+
+          - ${{ if ne(coalesce(parameters.projectSpecs.lintCommand, ''), '') }}:
+            - script: ${{ parameters.projectSpecs.lintCommand }}
+              displayName: Python - lint
+              workingDirectory: ${{ coalesce(parameters.projectSpecs.workingDirectory, './backend') }}
+              env:
+                ${{ each variable in parameters.projectSpecs.env }}:
+                  ${{ variable.key }}: ${{ variable.value }}
+
+          - script: ${{ coalesce(parameters.projectSpecs.testCommand, 'python -m unittest discover') }}
+            displayName: Python - test
+            workingDirectory: ${{ coalesce(parameters.projectSpecs.workingDirectory, './backend') }}
+            env:
+              ${{ each variable in parameters.projectSpecs.env }}:
+                ${{ variable.key }}: ${{ variable.value }}
+
+          - ${{ if ne(coalesce(parameters.projectSpecs.buildCommand, ''), '') }}:
+            - script: ${{ parameters.projectSpecs.buildCommand }}
+              displayName: Python - build
+              workingDirectory: ${{ coalesce(parameters.projectSpecs.workingDirectory, './backend') }}
+              env:
+                ${{ each variable in parameters.projectSpecs.env }}:
+                  ${{ variable.key }}: ${{ variable.value }}
+
+          - ${{ if ne(coalesce(parameters.projectSpecs.publishArtifact, true), false) }}:
+            - task: CopyFiles@2
+              displayName: Stage Python deployment source
+              inputs:
+                SourceFolder: ${{ coalesce(parameters.projectSpecs.workingDirectory, './backend') }}
+                TargetFolder: $(Build.ArtifactStagingDirectory)/python-app
+                CleanTargetFolder: true
+                Contents: |
+                  **
+                  !**/.git/**
+                  !**/.venv/**
+                  !**/venv/**
+                  !**/__pycache__/**
+                  !**/*.pyc
+                  !**/.env*
+                  !**/local.settings.json
+                  !**/node_modules/**
+                  !**/db.sqlite3
+            - task: PublishPipelineArtifact@1
+              displayName: Publish Python artifact
+              inputs:
+                targetPath: $(Build.ArtifactStagingDirectory)/python-app
+                artifact: ${{ coalesce(parameters.projectSpecs.artifactName, parameters.name) }}
+                publishLocation: pipeline
