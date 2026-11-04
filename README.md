@@ -164,6 +164,18 @@ Local regression checks: `python -m unittest discover -s tests -v`
 (requires Python with PyYAML, PowerShell 7, and Terraform). These checks are not a
 substitute for Azure DevOps template preview and an authorized pipeline run.
 
+### API Ops CLI Helpers
+
+The `api-ops-cli/plan.yaml` and `api-ops-cli/publish.yaml` helpers inspect
+`artifactsFolderPath` before running the CLI. Inspection supports zero, one, or
+multiple top-level subfolders and lists directories only. An existing empty
+directory reports no subfolders; a missing or unreadable source directory fails
+the task rather than being reported as empty.
+
+Focused regression checks: `python -m unittest discover -s tests -p test_apiops_folder_inspection.py -v`
+(requires Python with PyYAML and PowerShell 7). The checks execute the inspection
+scripts extracted from both templates without Azure access.
+
 ### PowerShell Helpers
 
 | Template | Purpose |

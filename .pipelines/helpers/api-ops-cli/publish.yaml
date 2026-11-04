@@ -136,8 +136,8 @@ steps:
         $artifactsPath = "$(Build.SourcesDirectory)/${{ parameters.artifactsFolderPath }}"
         Write-Information "Listing top-level folders beneath '$artifactsPath'..."
 
-        $folders = Get-ChildItem -Path $artifactsPath -Directory -ErrorAction SilentlyContinue
-        if (-not $folders -or $folders.Count -eq 0) {
+        $folders = @(Get-ChildItem -Path $artifactsPath -Directory -ErrorAction Stop)
+        if ($folders.Count -eq 0) {
           Write-Information "No subfolders found under '$artifactsPath'."
         }
         else {
