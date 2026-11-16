@@ -377,6 +377,29 @@ extends:
 
 ### Static Web App Helpers
 
+Copy [`examples/cd.yaml`](examples/cd.yaml) into your application repository for
+a complete same-run React + Node.js Functions build/publish/deploy pipeline
+targeting a **standalone Function App and a separate Static Web App**.
+Its distinct pipeline parameters `functionAppName` and `staticWebAppName` pass
+through `projectSpecs` under those same names. The Function App helper maps
+`functionAppName` to `AzureFunctionApp@2.appName`; the SWA helper uses
+`staticWebAppName` to retrieve that site's deployment token.
+Stage identifiers and artifact names are independent of Azure
+resource names. The backend deployment downloads `backend`; the SWA deployment
+downloads only `frontend`. Do not add the standalone backend as a SWA `api`
+artifact; provision its SWA backend link separately.
+Configure the GitHub repository service connection and pipeline parameters for
+the Azure deployment service connection, SWA resource group, and both existing
+resource names. Both resources must be accessible through that Azure service
+connection; adjust per-project connections if they use different subscriptions.
+Select `appType` and `isFlexConsumption` to match the existing Function App.
+The sample references the feature
+branch until a release containing these templates is available; pin that release
+tag when adopting it. It expects `frontend` and `backend` folders with committed
+npm lockfiles and `build` / `test:ci` scripts, plus the Functions package layout
+described below. Include `staticwebapp.config.json` in the frontend build output
+with a supported `platform.apiRuntime` consistent with the backend.
+
 | Template | Purpose |
 |----------|---------|
 | `static-web-app.yaml` | Stage consuming artifacts from the existing React and Node.js build helpers |
@@ -553,7 +576,8 @@ by this pipeline-artifact directory contract.
 | Backend `projectSpecs` property | Default | Description |
 |--------------------------------|---------|-------------|
 | `serviceConnectionName` | Required | Authorized Azure Resource Manager service connection |
-| `appName` | Required | Existing App Service or Function App name |
+| `functionAppName` | Required for `function-app` unless `appName` is supplied | Existing standalone Function App name; takes precedence over legacy `appName` |
+| `appName` | Required for `app-service` | Existing App Service name; also retained as a fallback for existing `function-app` consumers |
 | `artifactName` | Required | Name published by the build project in this pipeline run |
 | `appType` | `webAppLinux` / `functionAppLinux` | Must match the project type; `webApp` / `functionApp` select Windows targets |
 | `azureDevOpsEnvironment` | `''` | Optional Azure DevOps environment for CD approval gates/history |
@@ -626,7 +650,10 @@ extends:
 
 For a standalone Node.js Function App, keep the Node.js build with
 `packageFunctions: true`, use `projectType: function-app` for deployment, and set
-`artifactName` to that build's published artifact name. Choose the supported
+`projectSpecs.functionAppName` to the Function App resource name and
+`artifactName` to that build's published artifact name. The separate SWA project
+uses `projectSpecs.staticWebAppName`; neither resource name is taken from the
+project's stage `name` or artifact name. Choose the supported
 runtime in infrastructure, or pass `runtimeStack`, e.g. `NODE|22`. This is
 independent of the build helper's `nodeVersion`.
 
@@ -645,6 +672,10 @@ independent stages to run in parallel, subject to Azure DevOps parallel-job
 capacity. If you previously relied on implicit YAML stage order, add explicit
 dependencies before adopting this version. Set deployment dependencies to all
 required build/test stages so a failed independent build cannot be bypassed.
+Application dependencies are forwarded directly as objects, without applying
+`coalesce` to a collection, and emitted as explicit YAML sequences at the stage.
+Use a list of stage-name strings, not a mapping or a list of `{ name: ... }`
+objects.
 Existing Terraform/API/PowerShell stage semantics are unchanged.
 
 Projects that expose `dependencies` should declare Azure DevOps stage names, not project names. For example, if a Terraform project sets `applyStageName: lz_shared`, downstream stages should depend on `lz_shared`.

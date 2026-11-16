@@ -7,7 +7,7 @@ import unittest
 
 import yaml
 
-from template_preview import ROOT, expand
+from template_preview import ROOT, expand, render
 
 
 HELPERS = ROOT / ".pipelines" / "helpers"
@@ -33,6 +33,107 @@ def job_steps(job):
 
 
 class ApplicationTemplateTests(unittest.TestCase):
+    def test_dependency_shapes_remain_sequences_through_cd_and_ci(self):
+        projects = self.projects()
+        projects.extend([
+            {"name": "python_build", "projectType": "python", "projectSpecs": {}},
+            {"name": "standalone", "projectType": "function-app",
+             "projectSpecs": {"functionAppName": "example-fa",
+                              "serviceConnectionName": "sc", "artifactName": "backend"}},
+        ])
+        for entry in ("cd-template.yaml", "ci-template.yaml"):
+            for dependencies in (None, [], ["first_stage"], ["first_stage", "second_stage"]):
+                with self.subTest(entry=entry, dependencies=dependencies):
+                    configured = []
+                    for project in projects:
+                        project = {key: value for key, value in project.items()
+                                   if key != "dependencies"}
+                        if dependencies is not None:
+                            project["dependencies"] = dependencies
+                        configured.append(project)
+                    stages = expand(ROOT / ".pipelines" / entry,
+                                    {"projects": configured})["stages"]
+                    for stage in stages:
+                        self.assertIsInstance(stage["dependsOn"], list)
+                        self.assertEqual(stage["dependsOn"], dependencies or [])
+                        self.assertTrue(all(isinstance(name, str) for name in stage["dependsOn"]))
+        for helper in ("react/react.yaml", "nodejs/nodejs.yaml",
+                       "python/python.yaml", "static-web-app/static-web-app.yaml",
+                       "app-service/app-service.yaml"):
+            raw = yaml.safe_load((HELPERS / helper).read_text(encoding="utf-8"))
+            stage = raw["stages"][0]
+            self.assertEqual(stage["${{ if eq(length(parameters.dependencies), 0) }}"],
+                             {"dependsOn": []})
+            self.assertEqual(stage["${{ else }}"]["dependsOn"], [
+                {"${{ each dependency in parameters.dependencies }}": ["${{ dependency }}"]},
+            ])
+
+    def test_sample_wires_distinct_resource_names_and_artifacts(self):
+        sample = yaml.safe_load((ROOT / "examples" / "cd.yaml").read_text(encoding="utf-8"))
+        parameters = {item["name"]: item["default"] for item in sample["parameters"]}
+        parameters.update(
+            functionAppName="example-distinct-fa",
+            staticWebAppName="example-distinct-swa",
+            serviceConnectionName="example-deployment-sc",
+            resourceGroupName="example-swa-rg",
+        )
+        projects = render(sample["extends"]["parameters"],
+                          {"parameters": parameters})["projects"]
+        for entry, deploy in (("cd-template.yaml", True), ("ci-template.yaml", False)):
+            with self.subTest(entry=entry):
+                stages = expand(ROOT / ".pipelines" / entry, {"projects": projects})["stages"]
+                self.assertEqual([stage["dependsOn"] for stage in stages],
+                                 [[], [], ["build_frontend", "build_backend"], ["deploy_backend"]])
+                backend = job_steps(stages[2]["jobs"][0])
+                frontend = job_steps(stages[3]["jobs"][0])
+                configuration = next(step for step in backend
+                                     if step.get("displayName") == "Validate backend deployment configuration")
+                self.assertEqual(configuration["env"]["BACKEND_APP_NAME"], "example-distinct-fa")
+                self.assertEqual(
+                    [step["inputs"]["artifactName"] for step in backend
+                     if step.get("task") == "DownloadPipelineArtifact@2"], ["backend"])
+                self.assertEqual(
+                    [step["inputs"]["artifactName"] for step in frontend
+                     if step.get("task") == "DownloadPipelineArtifact@2"], ["frontend"])
+                if deploy:
+                    function = next(step["inputs"] for step in backend
+                                    if step.get("task") == "AzureFunctionApp@2")
+                    self.assertEqual(function["appName"], "example-distinct-fa")
+                    self.assertEqual(function["azureSubscription"], "example-deployment-sc")
+                    lookup = next(step for step in frontend if step.get("task") == "AzureCLI@2")
+                    self.assertEqual(lookup["env"]["SWA_NAME"], "example-distinct-swa")
+                    self.assertEqual(lookup["env"]["SWA_RESOURCE_GROUP"], "example-swa-rg")
+                    swa = next(step["inputs"] for step in frontend
+                               if step.get("task") == "AzureStaticWebApp@0")
+                    self.assertNotIn("api_location", swa)
+                else:
+                    self.assertFalse(any(step.get("task") in (
+                        "AzureCLI@2", "AzureStaticWebApp@0", "AzureFunctionApp@2"
+                    ) for step in backend + frontend))
+
+    def test_function_app_name_precedence_and_legacy_compatibility(self):
+        cases = [
+            ("function-app", {"functionAppName": "named-fa"}, "named-fa"),
+            ("function-app", {"appName": "legacy-fa"}, "legacy-fa"),
+            ("function-app", {"functionAppName": "named-fa", "appName": "legacy-fa"}, "named-fa"),
+            ("function-app", {"functionAppName": "", "appName": "legacy-fa"}, "legacy-fa"),
+            ("app-service", {"functionAppName": "ignored-fa", "appName": "named-web"}, "named-web"),
+        ]
+        for kind, names, expected in cases:
+            for entry in ("cd-template.yaml", "ci-template.yaml"):
+                with self.subTest(kind=kind, names=names, entry=entry):
+                    stages = expand(ROOT / ".pipelines" / entry, {"projects": [{
+                        "name": "unrelated_stage_name", "projectType": kind,
+                        "projectSpecs": {"serviceConnectionName": "sc",
+                                         "artifactName": "unrelated_artifact", **names},
+                    }]})["stages"]
+                    steps = job_steps(stages[0]["jobs"][0])
+                    self.assertEqual(steps[1]["env"]["BACKEND_APP_NAME"], expected)
+                    if entry == "cd-template.yaml":
+                        task = "AzureFunctionApp@2" if kind == "function-app" else "AzureWebApp@1"
+                        inputs = next(step["inputs"] for step in steps if step.get("task") == task)
+                        self.assertEqual(inputs["appName"], expected)
+
     def projects(self, environment="", packaging=True):
         return [
             {"name": "frontend", "projectType": "react", "projectSpecs": {

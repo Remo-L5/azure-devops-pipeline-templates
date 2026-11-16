@@ -166,7 +166,9 @@ function az {
             self.assertEqual(call["template"], "helpers/static-web-app/static-web-app.yaml")
             self.assertEqual(call["parameters"].get("validateOnly", False), validate_only)
             self.assertEqual(call["parameters"]["projectSpecs"], "${{ project.projectSpecs }}")
-            self.assertIn("project.dependencies", call["parameters"]["dependencies"])
+            forwarding = call["parameters"]["${{ each property in project }}"]
+            self.assertEqual(forwarding["${{ if eq(property.key, 'dependencies') }}"],
+                             {"dependencies": "${{ property.value }}"})
 
         stage = load(HELPERS / "static-web-app" / "static-web-app.yaml")
         job = stage["stages"][0]["jobs"][0]["parameters"]

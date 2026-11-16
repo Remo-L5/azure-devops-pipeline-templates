@@ -43,7 +43,9 @@ stages:
       - ${{ if eq(project.projectType, 'react') }}:
         - template: helpers/react/react.yaml
           parameters:
-            dependencies: ${{ coalesce(project.dependencies, parameters.emptyDependencyList) }}
+            ${{ each property in project }}:
+              ${{ if eq(property.key, 'dependencies') }}:
+                dependencies: ${{ property.value }}
             projectSpecs: ${{ project.projectSpecs }}
             name: ${{ project.name }}
             stageName: ${{ coalesce(project.stageName, '') }}
@@ -51,7 +53,9 @@ stages:
       - ${{ if eq(project.projectType, 'nodejs') }}:
         - template: helpers/nodejs/nodejs.yaml
           parameters:
-            dependencies: ${{ coalesce(project.dependencies, parameters.emptyDependencyList) }}
+            ${{ each property in project }}:
+              ${{ if eq(property.key, 'dependencies') }}:
+                dependencies: ${{ property.value }}
             projectSpecs: ${{ project.projectSpecs }}
             name: ${{ project.name }}
             stageName: ${{ coalesce(project.stageName, '') }}
@@ -59,7 +63,9 @@ stages:
       - ${{ if eq(project.projectType, 'static-web-app') }}:
         - template: helpers/static-web-app/static-web-app.yaml
           parameters:
-            dependencies: ${{ coalesce(project.dependencies, parameters.emptyDependencyList) }}
+            ${{ each property in project }}:
+              ${{ if eq(property.key, 'dependencies') }}:
+                dependencies: ${{ property.value }}
             projectSpecs: ${{ project.projectSpecs }}
             name: ${{ project.name }}
             stageName: ${{ coalesce(project.stageName, '') }}
@@ -77,7 +83,9 @@ stages:
       - ${{ if eq(project.projectType, 'python') }}:
         - template: helpers/python/python.yaml
           parameters:
-            dependencies: ${{ coalesce(project.dependencies, parameters.emptyDependencyList) }}
+            ${{ each property in project }}:
+              ${{ if eq(property.key, 'dependencies') }}:
+                dependencies: ${{ property.value }}
             projectSpecs: ${{ project.projectSpecs }}
             name: ${{ project.name }}
             stageName: ${{ coalesce(project.stageName, '') }}
@@ -85,7 +93,9 @@ stages:
       - ${{ if or(eq(project.projectType, 'app-service'), eq(project.projectType, 'function-app')) }}:
         - template: helpers/app-service/app-service.yaml
           parameters:
-            dependencies: ${{ coalesce(project.dependencies, parameters.emptyDependencyList) }}
+            ${{ each property in project }}:
+              ${{ if eq(property.key, 'dependencies') }}:
+                dependencies: ${{ property.value }}
             projectSpecs: ${{ project.projectSpecs }}
             name: ${{ project.name }}
             stageName: ${{ coalesce(project.stageName, '') }}

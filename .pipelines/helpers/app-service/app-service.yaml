@@ -24,7 +24,12 @@ parameters:
 stages:
   - stage: ${{ coalesce(parameters.stageName, parameters.name) }}
     displayName: ${{ coalesce(parameters.stageDisplayName, format('Deploy {0}', parameters.name)) }}
-    dependsOn: ${{ parameters.dependencies }}
+    ${{ if eq(length(parameters.dependencies), 0) }}:
+      dependsOn: []
+    ${{ else }}:
+      dependsOn:
+        - ${{ each dependency in parameters.dependencies }}:
+          - ${{ dependency }}
     pool:
       ${{ if ne(coalesce(parameters.projectSpecs.poolName, ''), '') }}:
         name: ${{ parameters.projectSpecs.poolName }}
@@ -40,13 +45,14 @@ stages:
             - template: /.pipelines/helpers/app-service/deploy.yaml
               parameters:
                 serviceConnectionName: ${{ parameters.projectSpecs.serviceConnectionName }}
-                appName: ${{ parameters.projectSpecs.appName }}
                 artifactName: ${{ parameters.projectSpecs.artifactName }}
                 functionApp: ${{ parameters.functionApp }}
                 validateOnly: ${{ parameters.validateOnly }}
                 ${{ if parameters.functionApp }}:
+                  appName: ${{ coalesce(parameters.projectSpecs.functionAppName, parameters.projectSpecs.appName, '') }}
                   appType: ${{ coalesce(parameters.projectSpecs.appType, 'functionAppLinux') }}
                 ${{ else }}:
+                  appName: ${{ coalesce(parameters.projectSpecs.appName, '') }}
                   appType: ${{ coalesce(parameters.projectSpecs.appType, 'webAppLinux') }}
                 resourceGroupName: ${{ coalesce(parameters.projectSpecs.resourceGroupName, '') }}
                 slotName: ${{ coalesce(parameters.projectSpecs.slotName, '') }}

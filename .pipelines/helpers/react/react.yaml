@@ -25,7 +25,12 @@ parameters:
 stages:
   - stage: ${{ coalesce(parameters.stageName, parameters.name) }}
     displayName: ${{ coalesce(parameters.stageDisplayName, format('Build {0}', parameters.name)) }}
-    dependsOn: ${{ parameters.dependencies }}
+    ${{ if eq(length(parameters.dependencies), 0) }}:
+      dependsOn: []
+    ${{ else }}:
+      dependsOn:
+        - ${{ each dependency in parameters.dependencies }}:
+          - ${{ dependency }}
     jobs:
       - job: build
         displayName: Build and test React
