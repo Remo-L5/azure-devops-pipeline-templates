@@ -1,0 +1,104 @@
+---
+# Copy this file into the application repository and configure the placeholders.
+# The backend must be a Node.js Azure Functions app, not an Express/NestJS server.
+# This sample targets a standalone Function App and a separate Static Web App.
+trigger: none
+pr: none
+
+parameters:
+  - name: staticWebAppName
+    displayName: Static Web App resource name
+    type: string
+    default: example-web-dev-swa
+  - name: functionAppName
+    displayName: Function App resource name
+    type: string
+    default: example-web-dev-fa
+  - name: resourceGroupName
+    displayName: Static Web App resource group
+    type: string
+    default: rg-example-web-dev
+  - name: serviceConnectionName
+    displayName: Azure deployment service connection
+    type: string
+    default: azure-web-deployment-connection
+
+resources:
+  repositories:
+    - repository: pipelineTemplates
+      type: github
+      endpoint: github-template-repository-connection
+      name: Remo-L5/azure-devops-pipeline-templates
+      # Use a release tag containing these helpers once available.
+      ref: refs/heads/remo-l5-static-web-apps-support
+
+extends:
+  template: .pipelines/cd-template.yaml@pipelineTemplates
+  parameters:
+    projects:
+      - name: build_frontend
+        projectType: react
+        dependencies: []
+        projectSpecs:
+          workingDirectory: ./frontend
+          nodeVersion: '22.x'
+          installCommand: ci
+          testScript: test:ci
+          # Enable only when the corresponding npm scripts exist.
+          # lintScript: lint
+          # typeCheckScript: typecheck
+          # Set true when the test suite uses Playwright.
+          playwrightInstall: false
+          publishArtifact: true
+          artifactPath: ./frontend/dist
+          artifactName: frontend
+
+      - name: build_backend
+        projectType: nodejs
+        dependencies: []
+        projectSpecs:
+          workingDirectory: ./backend
+          nodeVersion: '22.x'
+          installCommand: ci
+          testScript: test:ci
+          # Stage host.json, package.json, package-lock.json, and dist,
+          # then install production dependencies into the deployment package.
+          packageFunctions: true
+          publishArtifact: true
+          artifactName: backend
+
+      - name: deploy_backend
+        projectType: function-app
+        dependencies:
+          - build_frontend
+          - build_backend
+        projectSpecs:
+          serviceConnectionName: ${{ parameters.serviceConnectionName }}
+          functionAppName: ${{ parameters.functionAppName }}
+          artifactName: backend
+          appType: functionAppLinux
+          # Set true only when the existing Function App uses Flex Consumption.
+          isFlexConsumption: false
+          vmImage: ubuntu-latest
+          # Optional existing Azure DevOps environment for approvals/history:
+          # azureDevOpsEnvironment: example-backend-dev
+
+      - name: deploy_site
+        projectType: static-web-app
+        dependencies:
+          - deploy_backend
+        projectSpecs:
+          serviceConnectionName: ${{ parameters.serviceConnectionName }}
+          resourceGroupName: ${{ parameters.resourceGroupName }}
+          staticWebAppName: ${{ parameters.staticWebAppName }}
+          vmImage: ubuntu-latest
+          # Optional existing Azure DevOps environment for approvals/history:
+          # azureDevOpsEnvironment: example-web-dev
+          # Empty targets SWA production, even when the resource is named "dev".
+          deploymentEnvironment: ''
+          # Only the React artifact goes to SWA. The backend artifact is
+          # downloaded and deployed to the standalone Function App above.
+          # Configure the SWA backend link in infrastructure, not as role: api.
+          artifacts:
+            - artifactName: frontend
+              role: app

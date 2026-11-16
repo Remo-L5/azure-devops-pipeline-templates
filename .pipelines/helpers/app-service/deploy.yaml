@@ -1,0 +1,163 @@
+---
+parameters:
+  - name: serviceConnectionName
+    type: string
+  - name: appName
+    type: string
+  - name: artifactName
+    type: string
+  - name: appType
+    type: string
+    default: webAppLinux
+    values:
+      - webApp
+      - webAppLinux
+      - functionApp
+      - functionAppLinux
+  - name: functionApp
+    type: boolean
+    default: false
+  - name: validateOnly
+    type: boolean
+    default: false
+  - name: resourceGroupName
+    type: string
+    default: ''
+  - name: slotName
+    type: string
+    default: ''
+  - name: isFlexConsumption
+    type: boolean
+    default: false
+  - name: runtimeStack
+    type: string
+    default: ''
+  - name: startUpCommand
+    type: string
+    default: ''
+  - name: appSettings
+    type: string
+    default: ''
+
+steps:
+  - task: PowerShell@2
+    displayName: Validate backend deployment configuration
+    inputs:
+      targetType: inline
+      pwsh: true
+      script: |
+        $ErrorActionPreference = 'Stop'
+        foreach ($name in @('BACKEND_SERVICE_CONNECTION', 'BACKEND_APP_NAME', 'BACKEND_ARTIFACT')) {
+          if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+            throw "$name must be configured."
+          }
+        }
+        $functions = $env:BACKEND_FUNCTION_APP -eq 'True'
+        $flex = $env:BACKEND_FLEX -eq 'True'
+        if ($functions -ne $env:BACKEND_APP_TYPE.StartsWith('functionApp')) {
+          throw 'appType must match the app-service or function-app project type.'
+        }
+        if ($env:BACKEND_SLOT -and [string]::IsNullOrWhiteSpace($env:BACKEND_RESOURCE_GROUP)) {
+          throw 'resourceGroupName is required for slot deployment.'
+        }
+        if ($flex -and (-not $functions -or $env:BACKEND_APP_TYPE -ne 'functionAppLinux' -or $env:BACKEND_SLOT)) {
+          throw 'Flex Consumption requires functionAppLinux and does not support slots.'
+        }
+        if ($env:BACKEND_STARTUP -and $env:BACKEND_APP_TYPE -ne 'webAppLinux') {
+          throw 'startUpCommand is supported only for webAppLinux.'
+        }
+        if ($env:BACKEND_RUNTIME -and -not $env:BACKEND_APP_TYPE.EndsWith('Linux')) {
+          throw 'runtimeStack is supported only for Linux deployment targets.'
+        }
+        if ($flex -and $env:BACKEND_RUNTIME) {
+          throw 'Configure the Flex Consumption runtime in infrastructure, not runtimeStack.'
+        }
+        $root = Join-Path $env:PIPELINE_WORKSPACE 'backend-deploy'
+        if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
+        New-Item -ItemType Directory -Path $root | Out-Null
+    env:
+      BACKEND_SERVICE_CONNECTION: ${{ parameters.serviceConnectionName }}
+      BACKEND_APP_NAME: ${{ parameters.appName }}
+      BACKEND_ARTIFACT: ${{ parameters.artifactName }}
+      BACKEND_APP_TYPE: ${{ parameters.appType }}
+      BACKEND_FUNCTION_APP: ${{ parameters.functionApp }}
+      BACKEND_RESOURCE_GROUP: ${{ parameters.resourceGroupName }}
+      BACKEND_SLOT: ${{ parameters.slotName }}
+      BACKEND_FLEX: ${{ parameters.isFlexConsumption }}
+      BACKEND_STARTUP: ${{ parameters.startUpCommand }}
+      BACKEND_RUNTIME: ${{ parameters.runtimeStack }}
+      PIPELINE_WORKSPACE: $(Pipeline.Workspace)
+
+  - task: DownloadPipelineArtifact@2
+    displayName: Download backend artifact
+    inputs:
+      buildType: current
+      artifactName: ${{ parameters.artifactName }}
+      targetPath: $(Pipeline.Workspace)/backend-deploy/content
+
+  - task: PowerShell@2
+    displayName: Validate backend artifact
+    inputs:
+      targetType: inline
+      pwsh: true
+      script: |
+        $ErrorActionPreference = 'Stop'
+        $root = Join-Path $env:PIPELINE_WORKSPACE 'backend-deploy/content'
+        $files = @(Get-ChildItem -LiteralPath $root -Recurse -File)
+        if ($files.Count -eq 0) { throw 'Backend artifact must contain deployment files.' }
+        if ($files.Count -eq 1 -and $files[0].Extension -eq '.zip') {
+          throw 'Publish an unpacked backend directory, not a ZIP nested inside an artifact.'
+        }
+        if ($env:BACKEND_FUNCTION_APP -eq 'True') {
+          $hostConfig = Get-Content -LiteralPath (Join-Path $root 'host.json') -Raw | ConvertFrom-Json
+          if ($hostConfig.version -ne '2.0') { throw 'Functions artifact requires root host.json with version 2.0.' }
+        }
+    env:
+      BACKEND_FUNCTION_APP: ${{ parameters.functionApp }}
+      PIPELINE_WORKSPACE: $(Pipeline.Workspace)
+
+  - task: ArchiveFiles@2
+    displayName: Package backend deployment
+    inputs:
+      rootFolderOrFile: $(Pipeline.Workspace)/backend-deploy/content
+      includeRootFolder: false
+      archiveType: zip
+      archiveFile: $(Pipeline.Workspace)/backend-deploy/app.zip
+      replaceExistingArchive: true
+
+  - ${{ if eq(parameters.validateOnly, false) }}:
+    - ${{ if eq(parameters.functionApp, false) }}:
+      - task: AzureWebApp@1
+        displayName: Deploy App Service backend
+        inputs:
+          azureSubscription: ${{ parameters.serviceConnectionName }}
+          appType: ${{ parameters.appType }}
+          appName: ${{ parameters.appName }}
+          package: $(Pipeline.Workspace)/backend-deploy/app.zip
+          ${{ if ne(parameters.slotName, '') }}:
+            deployToSlotOrASE: true
+            resourceGroupName: ${{ parameters.resourceGroupName }}
+            slotName: ${{ parameters.slotName }}
+          ${{ if ne(parameters.runtimeStack, '') }}:
+            runtimeStack: ${{ parameters.runtimeStack }}
+          ${{ if ne(parameters.startUpCommand, '') }}:
+            startUpCommand: ${{ parameters.startUpCommand }}
+          ${{ if ne(parameters.appSettings, '') }}:
+            appSettings: ${{ parameters.appSettings }}
+    - ${{ else }}:
+      - task: AzureFunctionApp@2
+        displayName: Deploy Function App backend
+        inputs:
+          azureSubscription: ${{ parameters.serviceConnectionName }}
+          appType: ${{ parameters.appType }}
+          appName: ${{ parameters.appName }}
+          package: $(Pipeline.Workspace)/backend-deploy/app.zip
+          isFlexConsumption: ${{ parameters.isFlexConsumption }}
+          ${{ if ne(parameters.slotName, '') }}:
+            deployToSlotOrASE: true
+            resourceGroupName: ${{ parameters.resourceGroupName }}
+            slotName: ${{ parameters.slotName }}
+          ${{ if ne(parameters.runtimeStack, '') }}:
+            runtimeStack: ${{ parameters.runtimeStack }}
+          ${{ if ne(parameters.appSettings, '') }}:
+            appSettings: ${{ parameters.appSettings }}

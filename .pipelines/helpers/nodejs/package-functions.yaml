@@ -1,0 +1,66 @@
+---
+parameters:
+  - name: workingDirectory
+    type: string
+  - name: files
+    type: object
+    default:
+      - host.json
+      - package.json
+      - package-lock.json
+      - dist
+
+steps:
+  - task: PowerShell@2
+    displayName: Stage Node.js Functions package
+    inputs:
+      targetType: inline
+      pwsh: true
+      script: |
+        $ErrorActionPreference = 'Stop'
+        $source = (Resolve-Path -LiteralPath $env:FUNCTIONS_SOURCE).Path
+        $destination = Join-Path $env:BUILD_ARTIFACTSTAGINGDIRECTORY 'functions'
+        $files = ConvertFrom-Json -InputObject $env:FUNCTIONS_FILES -NoEnumerate
+        if ($files -isnot [array] -or $files.Count -eq 0) {
+          throw 'functionPackageFiles must be a non-empty list of relative files or directories.'
+        }
+        foreach ($file in $files) {
+          if ($file -isnot [string] -or [string]::IsNullOrWhiteSpace($file) -or $file -eq '.' -or
+              [IO.Path]::IsPathRooted($file) -or $file -match '(^|[\\/])\.\.($|[\\/])|[*?]' -or
+              $file -match '(^|[\\/])(\.git|\.env[^\\/]*|local\.settings\.json|node_modules)($|[\\/])') {
+            throw 'functionPackageFiles must use explicit relative paths without secrets, node_modules, or parent traversal.'
+          }
+          if (-not (Test-Path -LiteralPath (Join-Path $source $file))) {
+            throw "Required Functions package input is missing: $file"
+          }
+        }
+        $relativeDestination = [IO.Path]::GetRelativePath($source, [IO.Path]::GetFullPath($destination))
+        if ($relativeDestination -eq '.' -or -not ($relativeDestination -match '^\.\.([\\/]|$)' -or [IO.Path]::IsPathRooted($relativeDestination))) {
+          throw 'Functions staging must be outside the source directory.'
+        }
+        if (Test-Path -LiteralPath $destination) {
+          Remove-Item -LiteralPath $destination -Recurse -Force
+        }
+        New-Item -ItemType Directory -Path $destination | Out-Null
+        foreach ($file in $files) {
+          $target = Join-Path $destination $file
+          New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
+          Copy-Item -LiteralPath (Join-Path $source $file) -Destination $target -Recurse
+        }
+        $excluded = Get-ChildItem -LiteralPath $destination -Recurse -Force |
+          Where-Object { $_.Name -match '^(\.git|\.env.*|local\.settings\.json|node_modules)$' }
+        if ($excluded) {
+          throw 'Selected Functions inputs contain local settings, environment files, repository metadata, or node_modules.'
+        }
+    env:
+      FUNCTIONS_SOURCE: ${{ parameters.workingDirectory }}
+      FUNCTIONS_FILES: ${{ convertToJson(parameters.files) }}
+      BUILD_ARTIFACTSTAGINGDIRECTORY: $(Build.ArtifactStagingDirectory)
+
+  - script: npm ci --omit=dev
+    displayName: Install locked Functions production dependencies
+    workingDirectory: $(Build.ArtifactStagingDirectory)/functions
+
+  - template: validate-functions.yaml
+    parameters:
+      directory: $(Build.ArtifactStagingDirectory)/functions
